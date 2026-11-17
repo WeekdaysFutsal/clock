@@ -42,7 +42,7 @@ svg{display:block}
 [hidden]{display:none !important}
 
 /* ───────── 무대: 두 장의 면과 이음선 ───────── */
-#stage{position:fixed;inset:0;touch-action:none;
+#stage{position:fixed;inset:0;touch-action:none;opacity:var(--dimop,1);
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   transition:transform 2.4s ease}
 .face{position:absolute;inset:0;display:grid;grid-template-columns:minmax(0,1fr) var(--seam) minmax(0,1fr);
@@ -391,6 +391,29 @@ body.chrome-on #chrome{opacity:1;pointer-events:auto;transform:translate(-50%,0)
         <div class="seg" data-set="dim"><button data-val="-1">휴대폰 설정대로</button><button data-val="0.45">보통</button><button data-val="0.18">어둡게</button><button data-val="0.05">아주 어둡게</button></div>
       </div>
       <div>
+        <span class="label">세워둘 때 바깥 화면에 시계 표시<small id="dual-hint"></small></span>
+        <button class="switch" role="switch" id="dual-switch" aria-label="세워둘 때 바깥 화면에 시계 표시"></button>
+      </div>
+      <div>
+        <span class="label">무드등<small>시계가 바깥 화면에 뜨는 동안 안쪽 화면을 조명으로 씁니다.</small></span>
+        <button class="switch" role="switch" id="mood-switch" aria-label="무드등"></button>
+      </div>
+      <div>
+        <span class="label">무드등 색</span>
+        <div class="swatches" id="mood-colors">
+          <button data-val="#FF9A3C" style="--c:#FF9A3C" aria-label="촛불색"></button>
+          <button data-val="#FF6A3D" style="--c:#FF6A3D" aria-label="노을색"></button>
+          <button data-val="#FFE2B8" style="--c:#FFE2B8" aria-label="따뜻한 흰색"></button>
+          <button data-val="#FF8FB3" style="--c:#FF8FB3" aria-label="분홍색"></button>
+          <button data-val="#A98BFF" style="--c:#A98BFF" aria-label="보라색"></button>
+          <button data-val="#4FC3F7" style="--c:#4FC3F7" aria-label="하늘색"></button>
+        </div>
+      </div>
+      <div>
+        <span class="label">무드등 밝기</span>
+        <div class="seg" id="mood-level"><button data-val="0.12">은은하게</button><button data-val="0.45">보통</button><button data-val="1">밝게</button></div>
+      </div>
+      <div>
         <span class="label">날씨 지역<small id="place-now"></small></span>
         <form class="place" id="place-form">
           <input id="place-input" type="text" placeholder="도시 이름" autocomplete="off" enterkeyhint="search" aria-label="도시 이름">
@@ -436,10 +459,18 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ───────── 설정 저장 ───────── */
 const DEFAULTS = { face: 0, h24: true, num: 'bold', accent: 'amber', seam: true, night: 'auto', dim: -1,
-  place: { name: '서울', lat: 37.5665, lon: 126.978 }, seen: false };
-let cfg = Object.assign({}, DEFAULTS);
-try { Object.assign(cfg, JSON.parse(localStorage.getItem('standby') || '{}')); } catch (e) {}
-if (['bold', 'medium', 'geo', 'black'].indexOf(cfg.num) < 0) cfg.num = DEFAULTS.num;   // 예전 버전의 글꼴 이름은 기본값으로
+  place: { name: '서울', lat: 37.5665, lon: 126.978 }, seen: false,
+  dual: true, mood: { on: true, color: '#FF9A3C', level: 0.45 } };
+let cfg = {};
+function loadCfg() {
+  cfg = Object.assign({}, DEFAULTS);
+  try { Object.assign(cfg, JSON.parse(localStorage.getItem('standby') || '{}')); } catch (e) {}
+  cfg.mood = Object.assign({}, DEFAULTS.mood, cfg.mood);
+  if (['bold', 'medium', 'geo', 'black'].indexOf(cfg.num) < 0) cfg.num = DEFAULTS.num;   // 예전 버전의 글꼴 이름은 기본값으로
+}
+loadCfg();
+// 벌려 세웠을 때는 이 화면이 바깥(커버) 화면에 따로 뜹니다. 그때는 주소 끝에 cover=1이 붙습니다.
+const onCover = /[?&]cover=1/.test(location.search);
 const save = () => { try { localStorage.setItem('standby', JSON.stringify(cfg)); } catch (e) {} };
 
 /* ───────── 휴대폰(네이티브) 연결. 브라우저에서 열면 미리보기용 값으로 동작합니다. ───────── */
@@ -447,7 +478,8 @@ const preview = !window.Native;
 const N = window.Native || {
   nextAlarm() { const d = new Date(); d.setHours(7, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return String(d.getTime()); },
   setAlarm() { setTimeout(() => api.onNative({ type: 'alarmSent' }), 200); },
-  showAlarms() {}, setBrightness() {}, setAuto() {}, openOverlaySettings() {}, close() {},
+  showAlarms() {}, setBrightness() {}, setAuto() {}, openOverlaySettings() {}, close() {}, setMood() {}, setDual() {},
+  dualState() { return JSON.stringify({ enabled: true, status: 'available', active: false, angle: 60 }); },
   autoState() { return JSON.stringify({ hinge: false, charge: false, overlay: true, sensor: true }); },
   battery() { return JSON.stringify({ level: 82, charging: false }); },
   version() { return '미리보기'; }
@@ -625,8 +657,14 @@ function applyNight() {
   const root = document.documentElement;
   if ((root.dataset.night === '1') !== on) { root.dataset.night = on ? '1' : '0'; applyLook(); }
   const level = on ? (cfg.dim < 0 ? 0.04 : Math.min(cfg.dim, 0.04)) : cfg.dim;
-  if (applyNight.last !== level) { applyNight.last = level; call('setBrightness', level); }
+  if (applyNight.last !== level) {
+    applyNight.last = level; call('setBrightness', level);
+    // 바깥 화면은 앱이 밝기를 직접 바꿀 수 없어서, 화면 내용을 어둡게 그리는 방식으로 대신합니다.
+    const op = !onCover || level < 0 ? 1 : level >= .4 ? .8 : level >= .15 ? .55 : .35;
+    document.documentElement.style.setProperty('--dimop', String(op));
+  }
 }
+function applyMood() { call('setMood', !!cfg.mood.on, cfg.mood.color, +cfg.mood.level); }
 
 /* ───────── 날씨(Open-Meteo, 키 없이 사용) ───────── */
 let weatherBusy = false;
@@ -788,6 +826,15 @@ function syncSettings() {
     ? '이 기기에서는 접힘 각도 센서를 찾지 못해 쓸 수 없습니다.'
     : '잠금 화면에서 휴대폰을 반쯤 접어 세워두면 스탠바이가 켜집니다.';
   $('#overlay-row').hidden = !((st.hinge || st.charge) && st.overlay === false);
+  let ds = {}; try { ds = JSON.parse(call('dualState') || '{}'); } catch (e) {}
+  $('#dual-switch').setAttribute('aria-checked', String(!!cfg.dual));
+  $('#dual-hint').textContent = ds.status === 'unsupported'
+    ? '이 기기에서는 두 화면을 함께 쓰는 기능을 찾지 못했습니다.'
+    : ds.active ? '지금 바깥 화면에 표시하고 있습니다.'
+    : '휴대폰을 벌려 세우면 시계는 바깥 화면에, 안쪽 화면은 무드등으로 켜집니다.';
+  $('#mood-switch').setAttribute('aria-checked', String(!!cfg.mood.on));
+  $$('#mood-colors button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.val === cfg.mood.color)));
+  $$('#mood-level button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.val === +cfg.mood.level)));
   $('#ver').textContent = '버전 ' + (call('version') || '');
 }
 function openSettings() { syncSettings(); $('#place-results').innerHTML = ''; openSheet('#sheet-settings'); }
@@ -805,6 +852,10 @@ $$('[data-auto]').forEach(b => b.addEventListener('click', () => {
   setTimeout(syncSettings, 150);
 }));
 $('#overlay-open').addEventListener('click', () => call('openOverlaySettings'));
+$('#dual-switch').addEventListener('click', () => { cfg.dual = !cfg.dual; save(); call('setDual', !!cfg.dual); setTimeout(syncSettings, 200); });
+$('#mood-switch').addEventListener('click', () => { cfg.mood.on = !cfg.mood.on; save(); applyMood(); syncSettings(); });
+$('#mood-colors').addEventListener('click', e => { const b = e.target.closest('button[data-val]'); if (!b) return; cfg.mood.color = b.dataset.val; cfg.mood.on = true; save(); applyMood(); syncSettings(); });
+$('#mood-level').addEventListener('click', e => { const b = e.target.closest('button[data-val]'); if (!b) return; cfg.mood.level = +b.dataset.val; save(); applyMood(); syncSettings(); });
 $('#app-close').addEventListener('click', () => { closeSheets(); call('close'); });
 $('#place-form').addEventListener('submit', e => {
   e.preventDefault();
@@ -841,7 +892,7 @@ const api = {
     else if (msg.type === 'lux') { lux = +msg.lux; if (lux < 4) luxNight = true; else if (lux > 18) luxNight = false; applyNight(); }
     else if (msg.type === 'alarmSent') { toast((pendingAlarmText || '알람') + ' 알람을 시계 앱에 등록했습니다'); pendingAlarmText = ''; }
     else if (msg.type === 'error') { toast(msg.text || '요청을 처리하지 못했습니다'); }
-    else if (msg.type === 'resume') { readNative(); applyNight.last = undefined; redraw(); if ($('#sheet-settings.open')) syncSettings(); }
+    else if (msg.type === 'resume') { loadCfg(); readNative(); applyLook(); go(cfg.face); applyNight.last = undefined; redraw(); if ($('#sheet-settings.open')) syncSettings(); }
   }
 };
 window.Standby = api;
@@ -858,6 +909,7 @@ addEventListener('resize', () => { if ($('#sheet-alarm.open')) { wheelMark(wheel
   }
   $('#ticks').innerHTML = t;
   applyLook(); readNative(); go(cfg.face); renderTimer(); tick();
+  call('setDual', !!cfg.dual); applyMood();
   if (!cfg.seen) { cfg.seen = true; save(); showChrome(7000); toast('화면을 탭하면 메뉴가 나오고, 옆으로 밀면 시계가 바뀝니다', 6500); }
   if (preview) document.title = '스탠바이 (미리보기)';
 })();

@@ -30,14 +30,29 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
+import androidx.core.util.Consumer;
+import androidx.window.area.WindowAreaCapability;
+import androidx.window.area.WindowAreaController;
+import androidx.window.area.WindowAreaInfo;
+import androidx.window.area.WindowAreaPresentationSessionCallback;
+import androidx.window.area.WindowAreaSessionPresenter;
+import androidx.window.java.area.WindowAreaControllerCallbackAdapter;
+
+import java.util.List;
 import java.util.Locale;
 
 /**
  * 스탠바이 화면. 화면 그리기는 assets/index.html(웹)이 맡고,
  * 이 클래스는 휴대폰 기능(잠금 화면 위 표시, 화면 켜짐 유지, 센서, 알람 등록)을 웹에 이어 줍니다.
+ *
+ * 휴대폰을 벌려 세우면(텐트 자세) 켜지는 쪽은 안쪽 화면이라 밖에서 시계가 보이지 않습니다.
+ * 그래서 이 자세에서는 "듀얼 스크린" 기능으로 시계를 바깥(커버) 화면에 따로 띄우고,
+ * 안쪽 화면은 단색으로 채워 무드등으로 씁니다.
  */
-public class MainActivity extends Activity implements SensorEventListener {
+public class MainActivity extends Activity
+        implements SensorEventListener, WindowAreaPresentationSessionCallback {
 
     /** 자동 실행 서비스가 "이미 켜져 있는지" 확인할 때 봅니다. */
     static volatile boolean visible = false;
@@ -45,12 +60,19 @@ public class MainActivity extends Activity implements SensorEventListener {
     static final String EXTRA_AUTO = "auto";
     static final String AUTO_HINGE = "hinge";
     static final String AUTO_CHARGE = "charge";
+    static final String KEY_DUAL = "dual_cover";
 
     private static final String PAGE = "file:///android_asset/index.html";
+    /** 이 각도보다 덜 벌어져 있으면 "세워둔 자세"로 보고 바깥 화면에 시계를 띄웁니다. */
+    private static final float TENT_START = 135f;
+    private static final float TENT_END = 150f;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private WebView web;
+    private WebView web;           // 기본 시계 화면
+    private WebView coverWeb;      // 듀얼 스크린일 때 바깥 화면에 띄우는 시계
+    private View moodView;         // 듀얼 스크린일 때 안쪽 화면을 채우는 무드등
     private boolean pageReady = false;
+    private boolean coverReady = false;
 
     private SensorManager sensors;
     private Sensor hingeSensor;
@@ -59,12 +81,29 @@ public class MainActivity extends Activity implements SensorEventListener {
     private KeyguardManager keyguard;
     private SharedPreferences prefs;
 
+    private boolean started = false;
     private boolean startedByHinge = false;
     private boolean receiverOn = false;
+    private float hingeAngle = -1f;
     private float lastLux = -1f;
     private long lastLuxAt = 0L;
     private int batteryLevel = -1;
     private boolean batteryCharging = false;
+
+    // 바깥 화면(듀얼 스크린)
+    private WindowAreaControllerCallbackAdapter areaController;
+    private boolean areaListening = false;
+    private WindowAreaInfo rearArea;
+    private WindowAreaCapability.Status rearStatus = WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED;
+    private WindowAreaSessionPresenter coverSession;
+    private boolean coverStarting = false;
+    private long coverEndedAt = 0L;
+
+    // 밝기와 무드등
+    private float clockBrightness = -1f;
+    private boolean moodOn = true;
+    private int moodColor = 0xFFFF9A3C;
+    private float moodLevel = 0.45f;
 
     /** 세워둔 휴대폰을 완전히 펴거나 접으면 스탠바이를 닫습니다(세워서 켜진 경우에만). */
     private final Runnable closeIfUnfolded = new Runnable() {
@@ -73,6 +112,38 @@ public class MainActivity extends Activity implements SensorEventListener {
             if (startedByHinge && !isFinishing()) {
                 finish();
             }
+        }
+    };
+
+    private final Runnable dualCheck = new Runnable() {
+        @Override
+        public void run() {
+            updateDual();
+        }
+    };
+
+    private final Consumer<List<WindowAreaInfo>> areaListener = new Consumer<List<WindowAreaInfo>>() {
+        @Override
+        public void accept(List<WindowAreaInfo> infos) {
+            WindowAreaInfo found = null;
+            WindowAreaCapability.Status status = WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED;
+            if (infos != null) {
+                for (WindowAreaInfo info : infos) {
+                    if (WindowAreaInfo.Type.TYPE_REAR_FACING.equals(info.getType())) {
+                        found = info;
+                        WindowAreaCapability capability =
+                                info.getCapability(WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA);
+                        if (capability != null) {
+                            status = capability.getStatus();
+                        }
+                        break;
+                    }
+                }
+            }
+            rearArea = found;
+            rearStatus = status;
+            // 접고 펴는 순간에는 상태가 잠깐 튀므로, 조금 기다렸다가 판단합니다.
+            scheduleDualCheck(350L);
         }
     };
 
@@ -108,41 +179,65 @@ public class MainActivity extends Activity implements SensorEventListener {
         setTurnScreenOn(true);
 
         web = new WebView(this);
-        web.setBackgroundColor(Color.BLACK);
-        web.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        web.setVerticalScrollBarEnabled(false);
-        web.setHorizontalScrollBarEnabled(false);
-        web.setOnLongClickListener(new View.OnLongClickListener() {
+        configureWeb(web, false);
+
+        moodView = new View(this);
+        moodView.setBackgroundColor(Color.BLACK);
+        moodView.setVisibility(View.GONE);
+
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+        root.addView(web);
+        root.addView(moodView);
+        setContentView(root);
+        immersive();
+
+        try {
+            areaController = new WindowAreaControllerCallbackAdapter(WindowAreaController.getOrCreate());
+        } catch (Throwable t) {
+            areaController = null; // 듀얼 스크린을 지원하지 않는 기기
+        }
+
+        readIntent(getIntent());
+        ensureService();
+        web.loadUrl(PAGE);
+    }
+
+    /** 시계용 웹뷰 공통 설정. cover가 true면 바깥 화면용입니다. */
+    private void configureWeb(WebView view, final boolean cover) {
+        view.setBackgroundColor(Color.BLACK);
+        view.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        view.setVerticalScrollBarEnabled(false);
+        view.setHorizontalScrollBarEnabled(false);
+        view.setOnLongClickListener(new View.OnLongClickListener() {
             @Override
             public boolean onLongClick(View v) {
                 return true; // 길게 눌러도 글자 선택 메뉴가 뜨지 않게
             }
         });
-        WebSettings settings = web.getSettings();
+        WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setTextZoom(100);
         settings.setSupportZoom(false);
-        web.addJavascriptInterface(new Bridge(), "Native");
-        web.setWebViewClient(new WebViewClient() {
+        view.addJavascriptInterface(new Bridge(), "Native");
+        view.setWebViewClient(new WebViewClient() {
             @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            public boolean shouldOverrideUrlLoading(WebView v, String url) {
                 return url == null || !url.startsWith("file:///android_asset/");
             }
 
             @Override
-            public void onPageFinished(WebView view, String url) {
-                pageReady = true;
+            public void onPageFinished(WebView v, String url) {
+                if (cover) {
+                    coverReady = true;
+                } else {
+                    pageReady = true;
+                }
                 send("{\"type\":\"resume\"}");
             }
         });
-        setContentView(web);
-        immersive();
-
-        readIntent(getIntent());
-        ensureService();
-        web.loadUrl(PAGE);
     }
 
     @Override
@@ -160,11 +255,32 @@ public class MainActivity extends Activity implements SensorEventListener {
     protected void onStart() {
         super.onStart();
         visible = true;
+        started = true;
+        if (areaController != null && !areaListening) {
+            try {
+                areaController.addWindowAreaInfoListListener(getMainExecutor(), areaListener);
+                areaListening = true;
+            } catch (Throwable t) {
+                areaListening = false;
+            }
+        }
+        scheduleDualCheck(600L);
     }
 
     @Override
     protected void onStop() {
         visible = false;
+        started = false;
+        ui.removeCallbacks(dualCheck);
+        closeCover();
+        if (areaController != null && areaListening) {
+            try {
+                areaController.removeWindowAreaInfoListListener(areaListener);
+            } catch (Throwable ignored) {
+                // 이미 해제된 경우
+            }
+            areaListening = false;
+        }
         super.onStop();
     }
 
@@ -221,6 +337,7 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override
     protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
+        closeCover();
         if (web != null) {
             web.removeJavascriptInterface("Native");
             web.destroy();
@@ -264,6 +381,158 @@ public class MainActivity extends Activity implements SensorEventListener {
         }
     }
 
+    // ───────── 바깥 화면에 시계 띄우기(듀얼 스크린) ─────────
+
+    private void scheduleDualCheck(long delayMs) {
+        ui.removeCallbacks(dualCheck);
+        ui.postDelayed(dualCheck, delayMs);
+    }
+
+    /** 벌려 세운 자세인지. 각도 센서가 없으면 항상 그렇다고 봅니다. */
+    private boolean tentPosture() {
+        if (hingeAngle < 0f) {
+            return true;
+        }
+        return hingeAngle < (coverSession != null ? TENT_END : TENT_START);
+    }
+
+    /** 지금 상황에 맞게 바깥 화면 표시를 시작하거나 끝냅니다. */
+    private void updateDual() {
+        boolean want = started && !isFinishing()
+                && prefs.getBoolean(KEY_DUAL, true) && tentPosture();
+        if (coverSession != null) {
+            if (!want) {
+                closeCover();
+            }
+            return;
+        }
+        if (!want || coverStarting || areaController == null || rearArea == null) {
+            return;
+        }
+        if (!WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE.equals(rearStatus)) {
+            return;
+        }
+        long sinceEnd = System.currentTimeMillis() - coverEndedAt;
+        if (sinceEnd < 1500L) {
+            scheduleDualCheck(1500L - sinceEnd + 50L); // 방금 끝난 직후에는 바로 다시 시작하지 않습니다.
+            return;
+        }
+        coverStarting = true;
+        try {
+            areaController.presentContentOnWindowArea(rearArea.getToken(), this, getMainExecutor(), this);
+        } catch (Throwable t) {
+            coverStarting = false;
+        }
+    }
+
+    @Override
+    public void onSessionStarted(WindowAreaSessionPresenter session) {
+        coverStarting = false;
+        coverSession = session;
+        try {
+            coverReady = false;
+            coverWeb = new WebView(session.getContext());
+            configureWeb(coverWeb, true);
+            session.setContentView(coverWeb);
+            coverWeb.loadUrl(PAGE + "?cover=1");
+        } catch (Throwable t) {
+            closeCover();
+            return;
+        }
+        showMood(true);
+    }
+
+    @Override
+    public void onSessionEnded(Throwable t) {
+        coverStarting = false;
+        cleanupCover();
+        // 아직 세워둔 상태라면 잠시 뒤 다시 시도합니다.
+        scheduleDualCheck(1600L);
+    }
+
+    @Override
+    public void onContainerVisibilityChanged(boolean isVisible) {
+        // 쓰지 않습니다.
+    }
+
+    private void closeCover() {
+        WindowAreaSessionPresenter session = coverSession;
+        if (session != null) {
+            try {
+                session.close();
+            } catch (Throwable ignored) {
+                // 이미 끝난 경우
+            }
+        }
+        cleanupCover();
+    }
+
+    private void cleanupCover() {
+        boolean wasActive = coverSession != null || coverWeb != null;
+        coverSession = null;
+        coverReady = false;
+        if (coverWeb != null) {
+            try {
+                coverWeb.removeJavascriptInterface("Native");
+                coverWeb.destroy();
+            } catch (Throwable ignored) {
+                // 정리 중 오류는 무시합니다.
+            }
+            coverWeb = null;
+        }
+        if (wasActive) {
+            coverEndedAt = System.currentTimeMillis();
+            showMood(false);
+        }
+    }
+
+    /** 안쪽 화면을 무드등으로 바꾸거나(on), 다시 시계로 되돌립니다. */
+    private void showMood(boolean on) {
+        if (moodView == null || web == null) {
+            return;
+        }
+        moodView.setVisibility(on ? View.VISIBLE : View.GONE);
+        web.setVisibility(on ? View.GONE : View.VISIBLE);
+        applyInnerScreen();
+        if (!on) {
+            send("{\"type\":\"resume\"}");
+        }
+    }
+
+    /** 안쪽 화면의 밝기와 무드등 색을 지금 상태에 맞춥니다. */
+    private void applyInnerScreen() {
+        if (moodView == null) {
+            return;
+        }
+        boolean mood = coverSession != null;
+        moodView.setBackgroundColor(moodOn ? moodColor : Color.BLACK);
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        if (mood) {
+            lp.screenBrightness = moodOn ? Math.max(0.02f, Math.min(1f, moodLevel)) : 0.01f;
+        } else {
+            lp.screenBrightness = clockBrightness < 0f
+                    ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                    : Math.max(0.01f, Math.min(1f, clockBrightness));
+        }
+        getWindow().setAttributes(lp);
+    }
+
+    private String rearStatusName() {
+        if (areaController == null || rearArea == null) {
+            return "unsupported";
+        }
+        if (WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE.equals(rearStatus)) {
+            return "available";
+        }
+        if (WindowAreaCapability.Status.WINDOW_AREA_STATUS_ACTIVE.equals(rearStatus)) {
+            return "active";
+        }
+        if (WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNAVAILABLE.equals(rearStatus)) {
+            return "unavailable";
+        }
+        return "unsupported";
+    }
+
     // ───────── 센서 ─────────
 
     @Override
@@ -271,6 +540,11 @@ public class MainActivity extends Activity implements SensorEventListener {
         int type = event.sensor.getType();
         if (type == Sensor.TYPE_HINGE_ANGLE) {
             float angle = event.values[0];
+            boolean wasTent = tentPosture();
+            hingeAngle = angle;
+            if (wasTent != tentPosture() || coverSession == null) {
+                scheduleDualCheck(400L);
+            }
             ui.removeCallbacks(closeIfUnfolded);
             if (startedByHinge && (angle < 8f || angle > 165f)) {
                 ui.postDelayed(closeIfUnfolded, 1200L);
@@ -293,12 +567,17 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     // ───────── 웹으로 보내기 ─────────
 
+    /** 떠 있는 시계 화면(기본·바깥) 모두에 소식을 보냅니다. */
     private void send(final String json) {
         ui.post(new Runnable() {
             @Override
             public void run() {
+                String script = "window.Standby&&window.Standby.onNative(" + json + ");";
                 if (web != null && pageReady) {
-                    web.evaluateJavascript("window.Standby&&window.Standby.onNative(" + json + ");", null);
+                    web.evaluateJavascript(script, null);
+                }
+                if (coverWeb != null && coverReady) {
+                    coverWeb.evaluateJavascript(script, null);
                 }
             }
         });
@@ -381,19 +660,50 @@ public class MainActivity extends Activity implements SensorEventListener {
             launchUnlocked(new Intent(AlarmClock.ACTION_SHOW_ALARMS), null);
         }
 
-        /** 0~1 사이 값. 음수면 휴대폰 밝기 설정을 따릅니다. */
+        /** 시계 화면 밝기. 0~1 사이 값이고, 음수면 휴대폰 밝기 설정을 따릅니다. */
         @JavascriptInterface
         public void setBrightness(final double value) {
             ui.post(new Runnable() {
                 @Override
                 public void run() {
-                    WindowManager.LayoutParams lp = getWindow().getAttributes();
-                    lp.screenBrightness = value < 0
-                            ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                            : (float) Math.max(0.01, Math.min(1.0, value));
-                    getWindow().setAttributes(lp);
+                    clockBrightness = (float) value;
+                    applyInnerScreen();
                 }
             });
+        }
+
+        /** 무드등: 켬/끔, 색(#RRGGBB), 밝기(0~1). */
+        @JavascriptInterface
+        public void setMood(final boolean on, final String color, final double level) {
+            ui.post(new Runnable() {
+                @Override
+                public void run() {
+                    moodOn = on;
+                    moodLevel = (float) level;
+                    try {
+                        moodColor = Color.parseColor(color);
+                    } catch (RuntimeException ignored) {
+                        // 색 값이 잘못되면 이전 색을 그대로 씁니다.
+                    }
+                    applyInnerScreen();
+                }
+            });
+        }
+
+        /** 세워둘 때 시계를 바깥 화면에 띄울지. */
+        @JavascriptInterface
+        public void setDual(boolean enabled) {
+            prefs.edit().putBoolean(KEY_DUAL, enabled).apply();
+            scheduleDualCheck(100L);
+        }
+
+        /** 바깥 화면 표시 상태: 스위치, 기기 상태, 지금 표시 중인지, 접힘 각도. */
+        @JavascriptInterface
+        public String dualState() {
+            return "{\"enabled\":" + prefs.getBoolean(KEY_DUAL, true)
+                    + ",\"status\":\"" + rearStatusName() + "\""
+                    + ",\"active\":" + (coverSession != null)
+                    + ",\"angle\":" + Math.round(hingeAngle) + "}";
         }
 
         @JavascriptInterface
