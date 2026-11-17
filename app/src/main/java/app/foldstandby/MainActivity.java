@@ -1,5 +1,6 @@
 package app.foldstandby;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlarmManager;
 import android.app.KeyguardManager;
@@ -7,7 +8,10 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ContentUris;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -20,6 +24,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.AlarmClock;
+import android.provider.CalendarContract;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -40,6 +45,9 @@ import androidx.window.area.WindowAreaInfo;
 import androidx.window.area.WindowAreaPresentationSessionCallback;
 import androidx.window.area.WindowAreaSessionPresenter;
 import androidx.window.java.area.WindowAreaControllerCallbackAdapter;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -69,6 +77,7 @@ public class MainActivity extends Activity
     static final String KEY_COVER_ROT = "cover_rotation";
 
     private static final String PAGE = "file:///android_asset/index.html";
+    private static final int REQUEST_CALENDAR = 41;
     /** 이 각도보다 덜 벌어져 있으면 "세워둔 자세"로 보고 바깥 화면에 시계를 띄웁니다. */
     private static final float TENT_START = 135f;
     private static final float TENT_END = 150f;
@@ -662,6 +671,81 @@ public class MainActivity extends Activity
                 || status == BatteryManager.BATTERY_STATUS_FULL;
     }
 
+    // ───────── 캘린더(구글 캘린더 포함, 휴대폰에 동기화된 일정) ─────────
+
+    private boolean calendarAllowed() {
+        return checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_CALENDAR) {
+            send("{\"type\":\"calendar\",\"granted\":" + calendarAllowed() + "}");
+        }
+    }
+
+    /** from~to(밀리초) 사이의 일정을 읽어 JSON 배열 글자로 돌려줍니다. */
+    private String readEvents(long from, long to) {
+        JSONArray out = new JSONArray();
+        if (!calendarAllowed()) {
+            return out.toString();
+        }
+        Cursor cursor = null;
+        try {
+            Uri.Builder uri = CalendarContract.Instances.CONTENT_URI.buildUpon();
+            ContentUris.appendId(uri, from);
+            ContentUris.appendId(uri, to);
+            String[] columns = {
+                    CalendarContract.Instances.TITLE,
+                    CalendarContract.Instances.BEGIN,
+                    CalendarContract.Instances.END,
+                    CalendarContract.Instances.ALL_DAY,
+                    CalendarContract.Instances.DISPLAY_COLOR
+            };
+            cursor = getContentResolver().query(uri.build(), columns,
+                    CalendarContract.Calendars.VISIBLE + "=1", null,
+                    CalendarContract.Instances.BEGIN + " ASC");
+            int count = 0;
+            while (cursor != null && cursor.moveToNext() && count < 300) {
+                JSONObject event = new JSONObject();
+                event.put("t", cursor.isNull(0) ? "" : cursor.getString(0));
+                event.put("b", cursor.getLong(1));
+                event.put("e", cursor.getLong(2));
+                event.put("a", cursor.getInt(3) == 1);
+                event.put("c", cursor.isNull(4) ? 0 : (cursor.getInt(4) & 0xFFFFFF));
+                out.put(event);
+                count++;
+            }
+        } catch (Exception e) {
+            // 캘린더를 읽지 못하면 일정 없이 보여 줍니다.
+        } finally {
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+        return out.toString();
+    }
+
+    /** 잠겨 있으면 먼저 잠금을 풀게 한 뒤 실행합니다. */
+    private void whenUnlocked(final Runnable action) {
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                if (keyguard != null && keyguard.isKeyguardLocked()) {
+                    keyguard.requestDismissKeyguard(MainActivity.this, new KeyguardManager.KeyguardDismissCallback() {
+                        @Override
+                        public void onDismissSucceeded() {
+                            action.run();
+                        }
+                    });
+                } else {
+                    action.run();
+                }
+            }
+        });
+    }
+
     /** 다른 앱 화면을 열 때: 잠겨 있으면 먼저 잠금을 풀게 한 뒤 엽니다. */
     private void launchUnlocked(final Intent intent, final String doneMessage) {
         ui.post(new Runnable() {
@@ -770,6 +854,29 @@ public class MainActivity extends Activity
         public void setCoverRotation(int mode) {
             prefs.edit().putInt(KEY_COVER_ROT, mode).apply();
             ui.post(fitCover);
+        }
+
+        /** 캘린더 읽기 권한이 있는지. */
+        @JavascriptInterface
+        public boolean hasCalendar() {
+            return calendarAllowed();
+        }
+
+        /** 캘린더 읽기 권한을 요청합니다(휴대폰이 허용 여부를 묻는 창을 띄웁니다). */
+        @JavascriptInterface
+        public void requestCalendar() {
+            whenUnlocked(new Runnable() {
+                @Override
+                public void run() {
+                    requestPermissions(new String[]{Manifest.permission.READ_CALENDAR}, REQUEST_CALENDAR);
+                }
+            });
+        }
+
+        /** from~to(밀리초) 사이의 일정. [{t 제목, b 시작, e 끝, a 종일, c 색}] */
+        @JavascriptInterface
+        public String events(double from, double to) {
+            return readEvents((long) from, (long) to);
         }
 
         @JavascriptInterface

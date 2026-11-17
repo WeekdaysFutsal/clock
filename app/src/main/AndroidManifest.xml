@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 기본 시계 앱에 알람 등록 -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- 휴대폰에 동기화된 캘린더(구글 캘린더 포함) 일정 읽기 -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
     <!-- 세워두면 자동으로 켜기(감시 서비스) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
