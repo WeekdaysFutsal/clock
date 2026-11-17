@@ -41,8 +41,11 @@ import androidx.window.area.WindowAreaPresentationSessionCallback;
 import androidx.window.area.WindowAreaSessionPresenter;
 import androidx.window.java.area.WindowAreaControllerCallbackAdapter;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * 스탠바이 화면. 화면 그리기는 assets/index.html(웹)이 맡고,
@@ -80,7 +83,9 @@ public class MainActivity extends Activity
 
     private SensorManager sensors;
     private Sensor hingeSensor;
-    private Sensor lightSensor;
+    /** 조도 센서 전부. 폴드는 안쪽 화면용과 바깥 화면용이 따로 있을 수 있습니다. */
+    private List<Sensor> lightSensors = new ArrayList<>();
+    private final Map<Sensor, Float> luxBySensor = new HashMap<>();
     private AlarmManager alarms;
     private KeyguardManager keyguard;
     private SharedPreferences prefs;
@@ -174,7 +179,10 @@ public class MainActivity extends Activity
         prefs = getSharedPreferences(AutoLaunchService.PREFS, Context.MODE_PRIVATE);
         if (sensors != null) {
             hingeSensor = sensors.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE);
-            lightSensor = sensors.getDefaultSensor(Sensor.TYPE_LIGHT);
+            List<Sensor> found = sensors.getSensorList(Sensor.TYPE_LIGHT);
+            if (found != null) {
+                lightSensors = found;
+            }
         }
 
         Window window = getWindow();
@@ -312,10 +320,11 @@ public class MainActivity extends Activity
             if (hingeSensor != null) {
                 sensors.registerListener(this, hingeSensor, SensorManager.SENSOR_DELAY_NORMAL);
             }
-            if (lightSensor != null) {
-                sensors.registerListener(this, lightSensor, SensorManager.SENSOR_DELAY_NORMAL);
+            for (Sensor light : lightSensors) {
+                sensors.registerListener(this, light, SensorManager.SENSOR_DELAY_NORMAL);
             }
         }
+        luxBySensor.clear();
         lastLux = -1f;
         send("{\"type\":\"resume\"}");
     }
@@ -593,12 +602,18 @@ public class MainActivity extends Activity
                 ui.postDelayed(closeIfUnfolded, 1200L);
             }
         } else if (type == Sensor.TYPE_LIGHT) {
-            float lux = event.values[0];
+            // 세워두면 안쪽 센서는 가려져 어둡게 나옵니다. 그래서 센서들 가운데 가장 밝은 값을 씁니다.
+            luxBySensor.put(event.sensor, event.values[0]);
+            float lux = 0f;
+            for (Float value : luxBySensor.values()) {
+                lux = Math.max(lux, value);
+            }
             long now = System.currentTimeMillis();
             if (lastLux < 0f || (now - lastLuxAt > 2000L && Math.abs(lux - lastLux) >= 1f)) {
                 lastLux = lux;
                 lastLuxAt = now;
-                send("{\"type\":\"lux\",\"lux\":" + String.format(Locale.US, "%.1f", lux) + "}");
+                send("{\"type\":\"lux\",\"lux\":" + String.format(Locale.US, "%.1f", lux)
+                        + ",\"n\":" + lightSensors.size() + "}");
             }
         }
     }

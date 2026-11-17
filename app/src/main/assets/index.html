@@ -901,7 +901,12 @@ const api = {
     if (!msg) return;
     if (msg.type === 'alarm') { nextAlarm = +msg.next || 0; renderInfo(); }
     else if (msg.type === 'battery') { battery = { level: msg.level, charging: !!msg.charging }; renderInfo(); }
-    else if (msg.type === 'lux') { lux = +msg.lux; if (lux < 4) luxNight = true; else if (lux > 18) luxNight = false; applyNight(); }
+    else if (msg.type === 'lux') {
+      // 바깥 화면에 떠 있는데 조도 센서가 하나뿐이면, 그 센서는 가려진 안쪽 것일 수 있어 믿지 않고 시각(23시~6시)으로 판단합니다.
+      if (onCover && (+msg.n || 1) < 2) lux = null;
+      else { lux = +msg.lux; if (lux < 4) luxNight = true; else if (lux > 18) luxNight = false; }
+      applyNight();
+    }
     else if (msg.type === 'alarmSent') { toast((pendingAlarmText || '알람') + ' 알람을 시계 앱에 등록했습니다'); pendingAlarmText = ''; }
     else if (msg.type === 'error') { toast(msg.text || '요청을 처리하지 못했습니다'); }
     else if (msg.type === 'resume') { loadCfg(); readNative(); applyLook(); go(cfg.face); applyNight.last = undefined; redraw(); if ($('#sheet-settings.open')) syncSettings(); }
