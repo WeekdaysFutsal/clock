@@ -21,6 +21,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.AlarmClock;
 import android.provider.Settings;
+import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -61,6 +62,8 @@ public class MainActivity extends Activity
     static final String AUTO_HINGE = "hinge";
     static final String AUTO_CHARGE = "charge";
     static final String KEY_DUAL = "dual_cover";
+    /** 바깥 화면 방향. 0: 가로(기본), 1: 가로 반대 방향, 2: 돌리지 않음(세로). */
+    static final String KEY_COVER_ROT = "cover_rotation";
 
     private static final String PAGE = "file:///android_asset/index.html";
     /** 이 각도보다 덜 벌어져 있으면 "세워둔 자세"로 보고 바깥 화면에 시계를 띄웁니다. */
@@ -70,6 +73,7 @@ public class MainActivity extends Activity
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WebView web;           // 기본 시계 화면
     private WebView coverWeb;      // 듀얼 스크린일 때 바깥 화면에 띄우는 시계
+    private FrameLayout coverBox;  // 바깥 화면 전체를 덮는 틀(이 안에서 시계를 가로로 돌립니다)
     private View moodView;         // 듀얼 스크린일 때 안쪽 화면을 채우는 무드등
     private boolean pageReady = false;
     private boolean coverReady = false;
@@ -431,9 +435,23 @@ public class MainActivity extends Activity
         coverSession = session;
         try {
             coverReady = false;
-            coverWeb = new WebView(session.getContext());
+            Context coverContext = session.getContext();
+            coverBox = new FrameLayout(coverContext);
+            coverBox.setBackgroundColor(Color.BLACK);
+            coverWeb = new WebView(coverContext);
             configureWeb(coverWeb, true);
-            session.setContentView(coverWeb);
+            coverBox.addView(coverWeb);
+            coverBox.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+                @Override
+                public void onLayoutChange(View v, int left, int top, int right, int bottom,
+                                           int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                    if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                        ui.post(fitCover);
+                    }
+                }
+            });
+            session.setContentView(coverBox);
+            ui.post(fitCover);
             coverWeb.loadUrl(PAGE + "?cover=1");
         } catch (Throwable t) {
             closeCover();
@@ -471,6 +489,7 @@ public class MainActivity extends Activity
         boolean wasActive = coverSession != null || coverWeb != null;
         coverSession = null;
         coverReady = false;
+        coverBox = null;
         if (coverWeb != null) {
             try {
                 coverWeb.removeJavascriptInterface("Native");
@@ -485,6 +504,30 @@ public class MainActivity extends Activity
             showMood(false);
         }
     }
+
+    /**
+     * 바깥 화면은 휴대폰을 가로로 세워도 스스로 돌아가지 않고 세로 그대로입니다.
+     * 그래서 시계 화면을 가로 크기로 만든 뒤 90도 돌려서 틀에 맞춥니다.
+     * 폴드는 바깥 화면 왼쪽에 힌지가 있고, 세워두면 힌지가 위로 가므로 왼쪽으로(반시계 방향) 돌립니다.
+     */
+    private final Runnable fitCover = new Runnable() {
+        @Override
+        public void run() {
+            if (coverBox == null || coverWeb == null) {
+                return;
+            }
+            int w = coverBox.getWidth();
+            int h = coverBox.getHeight();
+            if (w <= 0 || h <= 0) {
+                return;
+            }
+            int mode = prefs.getInt(KEY_COVER_ROT, 0);
+            boolean rotate = mode != 2 && h > w;
+            coverWeb.setLayoutParams(new FrameLayout.LayoutParams(
+                    rotate ? h : w, rotate ? w : h, Gravity.CENTER));
+            coverWeb.setRotation(rotate ? (mode == 1 ? 90f : -90f) : 0f);
+        }
+    };
 
     /** 안쪽 화면을 무드등으로 바꾸거나(on), 다시 시계로 되돌립니다. */
     private void showMood(boolean on) {
@@ -703,7 +746,15 @@ public class MainActivity extends Activity
             return "{\"enabled\":" + prefs.getBoolean(KEY_DUAL, true)
                     + ",\"status\":\"" + rearStatusName() + "\""
                     + ",\"active\":" + (coverSession != null)
+                    + ",\"rot\":" + prefs.getInt(KEY_COVER_ROT, 0)
                     + ",\"angle\":" + Math.round(hingeAngle) + "}";
+        }
+
+        /** 바깥 화면 방향. 0: 가로, 1: 가로 반대 방향, 2: 세로. */
+        @JavascriptInterface
+        public void setCoverRotation(int mode) {
+            prefs.edit().putInt(KEY_COVER_ROT, mode).apply();
+            ui.post(fitCover);
         }
 
         @JavascriptInterface
@@ -719,6 +770,7 @@ public class MainActivity extends Activity
         public String autoState() {
             return "{\"hinge\":" + prefs.getBoolean(AutoLaunchService.KEY_HINGE, false)
                     + ",\"charge\":" + prefs.getBoolean(AutoLaunchService.KEY_CHARGE, false)
+                    + ",\"unlocked\":" + prefs.getBoolean(AutoLaunchService.KEY_UNLOCKED, true)
                     + ",\"overlay\":" + Settings.canDrawOverlays(MainActivity.this)
                     + ",\"sensor\":" + (hingeSensor != null) + "}";
         }
@@ -735,6 +787,12 @@ public class MainActivity extends Activity
                     ensureService();
                 }
             });
+        }
+
+        /** 잠금이 풀려 있을 때도 세워두면 켤지. */
+        @JavascriptInterface
+        public void setAutoUnlocked(boolean enabled) {
+            prefs.edit().putBoolean(AutoLaunchService.KEY_UNLOCKED, enabled).apply();
         }
 
         /** 잠금 화면 위로 스스로 뜨려면 '다른 앱 위에 표시' 권한이 필요합니다. */

@@ -395,6 +395,10 @@ body.chrome-on #chrome{opacity:1;pointer-events:auto;transform:translate(-50%,0)
         <button class="switch" role="switch" id="dual-switch" aria-label="세워둘 때 바깥 화면에 시계 표시"></button>
       </div>
       <div>
+        <span class="label">바깥 화면 방향<small>가로로 세웠는데 시계가 거꾸로 보이면 ‘가로 반대’를 고르세요.</small></span>
+        <div class="seg" id="cover-rot"><button data-val="0">가로</button><button data-val="1">가로 반대</button><button data-val="2">세로</button></div>
+      </div>
+      <div>
         <span class="label">무드등<small>시계가 바깥 화면에 뜨는 동안 안쪽 화면을 조명으로 씁니다.</small></span>
         <button class="switch" role="switch" id="mood-switch" aria-label="무드등"></button>
       </div>
@@ -422,8 +426,12 @@ body.chrome-on #chrome{opacity:1;pointer-events:auto;transform:translate(-50%,0)
         <div class="results" id="place-results"></div>
       </div>
       <div>
-        <span class="label">세워두면 자동으로 켜기<small id="auto-hint">잠금 화면에서 휴대폰을 반쯤 접어 세워두면 스탠바이가 켜집니다.</small></span>
+        <span class="label">세워두면 자동으로 켜기<small id="auto-hint">휴대폰을 살짝 벌려 세워두면 스탠바이가 켜집니다.</small></span>
         <button class="switch" role="switch" data-auto="hinge" aria-label="세워두면 자동으로 켜기"></button>
+      </div>
+      <div>
+        <span class="label">잠금이 풀려 있을 때도 켜기<small>살짝 벌려 가로로 세운 채 가만히 두면 켜집니다. 세워서 영상 같은 다른 앱을 볼 때는 꺼 두세요.</small></span>
+        <button class="switch" role="switch" id="auto-unlocked" aria-label="잠금이 풀려 있을 때도 켜기"></button>
       </div>
       <div>
         <span class="label">충전기를 연결하면 켜기<small>잠금 상태에서 충전을 시작하면 스탠바이가 켜집니다.</small></span>
@@ -478,9 +486,9 @@ const preview = !window.Native;
 const N = window.Native || {
   nextAlarm() { const d = new Date(); d.setHours(7, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return String(d.getTime()); },
   setAlarm() { setTimeout(() => api.onNative({ type: 'alarmSent' }), 200); },
-  showAlarms() {}, setBrightness() {}, setAuto() {}, openOverlaySettings() {}, close() {}, setMood() {}, setDual() {},
-  dualState() { return JSON.stringify({ enabled: true, status: 'available', active: false, angle: 60 }); },
-  autoState() { return JSON.stringify({ hinge: false, charge: false, overlay: true, sensor: true }); },
+  showAlarms() {}, setBrightness() {}, setAuto() {}, openOverlaySettings() {}, close() {}, setMood() {}, setDual() {}, setCoverRotation() {}, setAutoUnlocked() {},
+  dualState() { return JSON.stringify({ enabled: true, status: 'available', active: false, rot: 0, angle: 60 }); },
+  autoState() { return JSON.stringify({ hinge: false, charge: false, unlocked: true, overlay: true, sensor: true }); },
   battery() { return JSON.stringify({ level: 82, charging: false }); },
   version() { return '미리보기'; }
 };
@@ -822,9 +830,10 @@ function syncSettings() {
   const hinge = $('[data-auto="hinge"]'), charge = $('[data-auto="charge"]');
   hinge.setAttribute('aria-checked', String(!!st.hinge)); charge.setAttribute('aria-checked', String(!!st.charge));
   hinge.disabled = st.sensor === false;
+  const unl = $('#auto-unlocked'); unl.setAttribute('aria-checked', String(st.unlocked !== false)); unl.disabled = !st.hinge;
   $('#auto-hint').textContent = st.sensor === false
     ? '이 기기에서는 접힘 각도 센서를 찾지 못해 쓸 수 없습니다.'
-    : '잠금 화면에서 휴대폰을 반쯤 접어 세워두면 스탠바이가 켜집니다.';
+    : '휴대폰을 살짝 벌려 세워두면 스탠바이가 켜집니다.';
   $('#overlay-row').hidden = !((st.hinge || st.charge) && st.overlay === false);
   let ds = {}; try { ds = JSON.parse(call('dualState') || '{}'); } catch (e) {}
   $('#dual-switch').setAttribute('aria-checked', String(!!cfg.dual));
@@ -832,6 +841,7 @@ function syncSettings() {
     ? '이 기기에서는 두 화면을 함께 쓰는 기능을 찾지 못했습니다.'
     : ds.active ? '지금 바깥 화면에 표시하고 있습니다.'
     : '휴대폰을 벌려 세우면 시계는 바깥 화면에, 안쪽 화면은 무드등으로 켜집니다.';
+  $$('#cover-rot button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.val === (+ds.rot || 0))));
   $('#mood-switch').setAttribute('aria-checked', String(!!cfg.mood.on));
   $$('#mood-colors button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.val === cfg.mood.color)));
   $$('#mood-level button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.val === +cfg.mood.level)));
@@ -853,6 +863,8 @@ $$('[data-auto]').forEach(b => b.addEventListener('click', () => {
 }));
 $('#overlay-open').addEventListener('click', () => call('openOverlaySettings'));
 $('#dual-switch').addEventListener('click', () => { cfg.dual = !cfg.dual; save(); call('setDual', !!cfg.dual); setTimeout(syncSettings, 200); });
+$('#cover-rot').addEventListener('click', e => { const b = e.target.closest('button[data-val]'); if (!b) return; call('setCoverRotation', +b.dataset.val); setTimeout(syncSettings, 150); });
+$('#auto-unlocked').addEventListener('click', e => { const on = e.currentTarget.getAttribute('aria-checked') !== 'true'; call('setAutoUnlocked', on); setTimeout(syncSettings, 150); });
 $('#mood-switch').addEventListener('click', () => { cfg.mood.on = !cfg.mood.on; save(); applyMood(); syncSettings(); });
 $('#mood-colors').addEventListener('click', e => { const b = e.target.closest('button[data-val]'); if (!b) return; cfg.mood.color = b.dataset.val; cfg.mood.on = true; save(); applyMood(); syncSettings(); });
 $('#mood-level').addEventListener('click', e => { const b = e.target.closest('button[data-val]'); if (!b) return; cfg.mood.level = +b.dataset.val; save(); applyMood(); syncSettings(); });

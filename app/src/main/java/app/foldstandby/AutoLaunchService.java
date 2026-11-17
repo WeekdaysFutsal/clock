@@ -25,6 +25,8 @@ import android.os.PowerManager;
 /**
  * 자동 실행 감시 서비스.
  *  - 잠금 화면이 켜진 상태에서 휴대폰을 벌려 세워(20~150도) 1.5초쯤 그대로 두면 스탠바이를 엽니다.
+ *  - 잠금이 풀려 있을 때는 손에 들고 쓰는 것과 구분해야 하므로, 살짝 벌려(20~100도)
+ *    힌지가 위로 가게 가로로 세운 채 가만히 두었을 때만 엽니다.
  *  - (선택) 잠금 상태에서 충전기를 연결하면 스탠바이를 엽니다.
  * 화면이 꺼져 있는 동안에는 센서를 듣지 않아 배터리를 거의 쓰지 않습니다.
  * 스스로 화면을 띄우려면 '다른 앱 위에 표시' 권한이 허용되어 있어야 합니다.
@@ -34,16 +36,22 @@ public class AutoLaunchService extends Service implements SensorEventListener {
     static final String PREFS = "standby";
     static final String KEY_HINGE = "auto_hinge";
     static final String KEY_CHARGE = "auto_charge";
+    static final String KEY_UNLOCKED = "auto_unlocked";
 
     private static final String CHANNEL = "auto_launch";
     private static final int NOTIFICATION_ID = 1;
     private static final float MIN_ANGLE = 20f;   // 살짝만 벌려 세운 경우도 포함
     private static final float MAX_ANGLE = 150f;
+    private static final float MAX_ANGLE_UNLOCKED = 100f;
+    /** 힌지 방향(y축)으로 걸리는 중력이 이보다 작으면 힌지가 수평, 곧 가로로 세운 자세입니다. */
+    private static final float MAX_HINGE_TILT = 4.5f;
+    private static final float MAX_MOVE = 1.5f;
     private static final long SETTLE_MS = 1500L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SensorManager sensors;
     private Sensor hingeSensor;
+    private Sensor accelSensor;
     private PowerManager power;
     private KeyguardManager keyguard;
     private SharedPreferences prefs;
@@ -54,6 +62,9 @@ public class AutoLaunchService extends Service implements SensorEventListener {
     private boolean waiting = false;
     private float angle = -1f;
     private float angleAtStart = -1f;
+    private boolean hasAccel = false;
+    private float ax, ay, az;          // 지금 중력 방향
+    private float sx, sy, sz;          // 기다리기 시작할 때의 중력 방향
 
     private final Runnable settle = new Runnable() {
         @Override
@@ -88,6 +99,7 @@ public class AutoLaunchService extends Service implements SensorEventListener {
         prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (sensors != null) {
             hingeSensor = sensors.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE);
+            accelSensor = sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         }
 
         if (!goForeground()) {
@@ -185,6 +197,10 @@ public class AutoLaunchService extends Service implements SensorEventListener {
             return;
         }
         listening = sensors.registerListener(this, hingeSensor, SensorManager.SENSOR_DELAY_NORMAL);
+        hasAccel = false;
+        if (listening && accelSensor != null) {
+            sensors.registerListener(this, accelSensor, SensorManager.SENSOR_DELAY_NORMAL);
+        }
     }
 
     private void unlisten() {
@@ -206,7 +222,15 @@ public class AutoLaunchService extends Service implements SensorEventListener {
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (event.sensor.getType() != Sensor.TYPE_HINGE_ANGLE) {
+        int type = event.sensor.getType();
+        if (type == Sensor.TYPE_ACCELEROMETER) {
+            ax = event.values[0];
+            ay = event.values[1];
+            az = event.values[2];
+            hasAccel = true;
+            return;
+        }
+        if (type != Sensor.TYPE_HINGE_ANGLE) {
             return;
         }
         angle = event.values[0];
@@ -217,10 +241,34 @@ public class AutoLaunchService extends Service implements SensorEventListener {
             return;
         }
         if (armed && !waiting) {
-            waiting = true;
-            angleAtStart = angle;
-            handler.postDelayed(settle, SETTLE_MS);
+            waitAgain();
         }
+    }
+
+    private void waitAgain() {
+        waiting = true;
+        angleAtStart = angle;
+        sx = ax;
+        sy = ay;
+        sz = az;
+        handler.postDelayed(settle, SETTLE_MS);
+    }
+
+    /** 잠금이 풀린 상태에서: 살짝 벌려 가로로 세운 채 가만히 있는지. */
+    private boolean standingStill() {
+        if (angle > MAX_ANGLE_UNLOCKED) {
+            return false;
+        }
+        if (accelSensor == null) {
+            return true; // 확인할 센서가 없으면 각도만 봅니다.
+        }
+        if (!hasAccel || Math.abs(ay) > MAX_HINGE_TILT) {
+            return false;
+        }
+        float dx = ax - sx;
+        float dy = ay - sy;
+        float dz = az - sz;
+        return dx * dx + dy * dy + dz * dz < MAX_MOVE * MAX_MOVE;
     }
 
     @Override
@@ -235,18 +283,24 @@ public class AutoLaunchService extends Service implements SensorEventListener {
             return;
         }
         if (Math.abs(angle - angleAtStart) > 10f) {
-            // 아직 움직이는 중이면 한 번 더 기다립니다.
-            waiting = true;
-            angleAtStart = angle;
-            handler.postDelayed(settle, SETTLE_MS);
+            waitAgain(); // 아직 움직이는 중이면 한 번 더 기다립니다.
             return;
         }
         if (MainActivity.visible) {
             armed = false;
             return;
         }
-        if (!isLocked() || (power != null && !power.isInteractive())) {
-            return; // 잠금 화면이 켜져 있을 때만 엽니다.
+        if (power != null && !power.isInteractive()) {
+            return; // 화면이 꺼져 있으면 열지 않습니다. 다시 켜질 때 새로 확인합니다.
+        }
+        if (!isLocked()) {
+            if (!prefs.getBoolean(KEY_UNLOCKED, true)) {
+                return;
+            }
+            if (!standingStill()) {
+                waitAgain(); // 손에 들고 있거나 아직 내려놓는 중이면 조금 뒤 다시 봅니다.
+                return;
+            }
         }
         armed = false;
         launch(MainActivity.AUTO_HINGE);
