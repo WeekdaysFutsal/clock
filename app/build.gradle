@@ -14,7 +14,7 @@ android {
         minSdk 30
         targetSdk 35
         versionCode buildNumber
-        versionName '0.5'
+        versionName '0.5.1'
     }
 
     // 매번 같은 키로 서명해야 덮어 설치가 됩니다. 개인용 앱이라 키를 저장소에 함께 둡니다.
@@ -53,4 +53,6 @@ dependencies {
     // 접은 채 세웠을 때 시계를 바깥(커버) 화면에 띄우는 데 씁니다(듀얼 스크린).
     implementation 'androidx.window:window:1.5.1'
     implementation 'androidx.window:window-java:1.5.1'
+    // window-java가 쓰는 Consumer 타입이 들어 있는 기본 라이브러리(직접 적어 줘야 컴파일됩니다).
+    implementation 'androidx.core:core:1.13.1'
 }
