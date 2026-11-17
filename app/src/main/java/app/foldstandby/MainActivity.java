@@ -272,7 +272,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (type == Sensor.TYPE_HINGE_ANGLE) {
             float angle = event.values[0];
             ui.removeCallbacks(closeIfUnfolded);
-            if (startedByHinge && (angle < 20f || angle > 165f)) {
+            if (startedByHinge && (angle < 8f || angle > 165f)) {
                 ui.postDelayed(closeIfUnfolded, 1200L);
             }
         } else if (type == Sensor.TYPE_LIGHT) {

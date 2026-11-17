@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko" data-num="straight" data-night="0">
+<html lang="ko" data-num="bold" data-night="0">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
@@ -17,17 +17,19 @@
   --line:#25231D;
   --accent:#FFB300;
   --ui:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans KR","Noto Sans CJK KR",sans-serif;
-  --num:"Num Straight",var(--ui);
-  --pair:.912;   /* 숫자 두 개의 너비(em) */
-  --cap:.718;    /* 숫자 높이(em) */
-  --shift:.040;  /* 숫자를 줄 상자 한가운데로 올리는 보정값(em) */
-  --colon:.273;
+  --num:"Num Bold",var(--ui);
+  --numw:400;    /* 숫자 굵기(글꼴 파일 자체가 굵은 글꼴이라 400으로 둡니다) */
+  --pair:1.354;  /* 숫자 두 개의 너비(em) */
+  --cap:.734;    /* 숫자 높이(em) */
+  --shift:-.017; /* 숫자를 줄 상자 한가운데로 올리는 보정값(em) */
+  --colon:.284;
   --pad:clamp(14px,4.6vmin,36px);
   --meta:clamp(14px,4.2vmin,22px);
   --seam:3px;
 }
-html[data-num="round"]{--num:"Num Round",var(--ui);--pair:1.12;--cap:.739;--shift:-.092;--colon:.28}
-html[data-num="serif"]{--num:"Num Serif",var(--ui);--pair:1.148;--cap:.722;--shift:.040;--colon:.278}
+html[data-num="medium"]{--num:"Num Medium",var(--ui);--pair:1.294;--cap:.734;--shift:-.017;--colon:.245}
+html[data-num="geo"]{--num:"Num Geo",var(--ui);--pair:1.12;--cap:.75;--shift:-.098;--colon:.28}
+html[data-num="black"]{--num:"Num Black",var(--ui);--pair:1.381;--cap:.734;--shift:-.003;--colon:.266}
 html[data-night="1"]{--ink:#E2331F;--dim:#8A2116;--faint:#40100A;--line:#2A0B07;--accent:#E2331F}
 
 *{box-sizing:border-box;margin:0;padding:0}
@@ -78,7 +80,7 @@ svg{display:block}
   .leaf.a .page{transform-origin:50% 100%}
   .leaf.b .page{transform-origin:50% 0}
 }
-.digits{display:flex;font-family:var(--num);font-weight:700;line-height:1;color:var(--ink);
+.digits{display:flex;font-family:var(--num);font-weight:var(--numw);line-height:1;color:var(--ink);
   font-size:min(calc(86cqw / var(--pair)),calc(60cqh / var(--cap)));
   transform:translateY(calc(var(--shift) * -1em));font-variant-numeric:tabular-nums lining-nums}
 .digits b{display:block;width:calc(var(--pair) * .5em);text-align:center;font-weight:inherit}
@@ -88,7 +90,7 @@ svg{display:block}
 .dial{width:min(100cqw,100cqh);height:min(100cqw,100cqh)}
 .dial .tick{stroke:var(--faint);stroke-width:.9}
 .dial .tick.h{stroke:var(--ink);stroke-width:2.2}
-.dial text{font-family:var(--num);font-weight:700;font-size:21px;fill:var(--ink);text-anchor:middle;dominant-baseline:central}
+.dial text{font-family:var(--num);font-weight:var(--numw);font-size:21px;fill:var(--ink);text-anchor:middle;dominant-baseline:central}
 .hand{transform:rotate(var(--deg,0deg));transition:transform .6s cubic-bezier(.3,.9,.3,1)}
 .hand line{stroke:var(--ink);stroke-linecap:round}
 .hand.sec{transition:transform 1s linear}
@@ -175,10 +177,10 @@ body.chrome-on #chrome{opacity:1;pointer-events:auto;transform:translate(-50%,0)
   -webkit-mask-image:linear-gradient(transparent,#000 30%,#000 70%,transparent);mask-image:linear-gradient(transparent,#000 30%,#000 70%,transparent)}
 .wheel::-webkit-scrollbar{display:none}
 .wheel::before,.wheel::after{content:"";display:block;height:52px}
-.wheel button{display:block;width:100%;height:52px;scroll-snap-align:center;font-family:var(--num);font-weight:700;
-  font-size:34px;line-height:52px;color:var(--faint);font-variant-numeric:tabular-nums;transition:color .15s}
+.wheel button{display:block;width:100%;height:52px;scroll-snap-align:center;font-family:var(--num);font-weight:var(--numw);
+  font-size:34px;line-height:52px;color:var(--dim);font-variant-numeric:tabular-nums;transition:color .15s}
 .wheel button.sel{color:var(--ink)}
-.picker .sep{font-family:var(--num);font-weight:700;font-size:34px;color:var(--accent)}
+.picker .sep{font-family:var(--num);font-weight:var(--numw);font-size:34px;color:var(--accent)}
 .seg{display:inline-flex;border:1px solid var(--faint);border-radius:999px;padding:3px;gap:2px;flex-wrap:wrap}
 .seg button{min-height:38px;padding:0 14px;border-radius:999px;color:var(--dim);font-weight:600;font-size:15px;white-space:nowrap}
 .seg button[aria-pressed="true"]{background:var(--ink);color:#000}
@@ -364,7 +366,7 @@ body.chrome-on #chrome{opacity:1;pointer-events:auto;transform:translate(-50%,0)
       </div>
       <div>
         <span class="label">숫자 모양</span>
-        <div class="seg" data-set="num"><button data-val="straight">곧은</button><button data-val="round">둥근</button><button data-val="serif">명조</button></div>
+        <div class="seg" data-set="num"><button data-val="bold">도톰</button><button data-val="medium">산뜻</button><button data-val="geo">뾰족</button><button data-val="black">묵직</button></div>
       </div>
       <div>
         <span class="label">강조색</span>
@@ -433,10 +435,11 @@ const BELL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ───────── 설정 저장 ───────── */
-const DEFAULTS = { face: 0, h24: true, num: 'straight', accent: 'amber', seam: true, night: 'auto', dim: -1,
+const DEFAULTS = { face: 0, h24: true, num: 'bold', accent: 'amber', seam: true, night: 'auto', dim: -1,
   place: { name: '서울', lat: 37.5665, lon: 126.978 }, seen: false };
 let cfg = Object.assign({}, DEFAULTS);
 try { Object.assign(cfg, JSON.parse(localStorage.getItem('standby') || '{}')); } catch (e) {}
+if (['bold', 'medium', 'geo', 'black'].indexOf(cfg.num) < 0) cfg.num = DEFAULTS.num;   // 예전 버전의 글꼴 이름은 기본값으로
 const save = () => { try { localStorage.setItem('standby', JSON.stringify(cfg)); } catch (e) {} };
 
 /* ───────── 휴대폰(네이티브) 연결. 브라우저에서 열면 미리보기용 값으로 동작합니다. ───────── */

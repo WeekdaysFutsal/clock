@@ -14,7 +14,7 @@ android {
         minSdk 30
         targetSdk 35
         versionCode buildNumber
-        versionName '0.1'
+        versionName '0.4'
     }
 
     // 매번 같은 키로 서명해야 덮어 설치가 됩니다. 개인용 앱이라 키를 저장소에 함께 둡니다.

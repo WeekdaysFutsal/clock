@@ -24,7 +24,7 @@ import android.os.PowerManager;
 
 /**
  * 자동 실행 감시 서비스.
- *  - 잠금 화면이 켜진 상태에서 휴대폰을 반쯤 접어(45~150도) 1.5초쯤 그대로 두면 스탠바이를 엽니다.
+ *  - 잠금 화면이 켜진 상태에서 휴대폰을 벌려 세워(20~150도) 1.5초쯤 그대로 두면 스탠바이를 엽니다.
  *  - (선택) 잠금 상태에서 충전기를 연결하면 스탠바이를 엽니다.
  * 화면이 꺼져 있는 동안에는 센서를 듣지 않아 배터리를 거의 쓰지 않습니다.
  * 스스로 화면을 띄우려면 '다른 앱 위에 표시' 권한이 허용되어 있어야 합니다.
@@ -37,7 +37,7 @@ public class AutoLaunchService extends Service implements SensorEventListener {
 
     private static final String CHANNEL = "auto_launch";
     private static final int NOTIFICATION_ID = 1;
-    private static final float MIN_ANGLE = 45f;
+    private static final float MIN_ANGLE = 20f;   // 살짝만 벌려 세운 경우도 포함
     private static final float MAX_ANGLE = 150f;
     private static final long SETTLE_MS = 1500L;
 
