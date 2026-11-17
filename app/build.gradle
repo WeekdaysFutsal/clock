@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application'
+}
+
+// GitHub Actions가 빌드할 때마다 번호가 올라가서, 새 APK를 기존 앱 위에 덮어 설치할 수 있습니다.
+def buildNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
+
+android {
+    namespace 'app.foldstandby'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'app.foldstandby'
+        minSdk 30
+        targetSdk 35
+        versionCode buildNumber
+        versionName '0.1'
+    }
+
+    // 매번 같은 키로 서명해야 덮어 설치가 됩니다. 개인용 앱이라 키를 저장소에 함께 둡니다.
+    signingConfigs {
+        shared {
+            storeFile rootProject.file('keystore/foldstandby.p12')
+            storeType 'pkcs12'
+            storePassword 'foldstandby'
+            keyAlias 'foldstandby'
+            keyPassword 'foldstandby'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.shared
+        }
+        debug {
+            signingConfig signingConfigs.shared
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">스탠바이</string>
+    <string name="channel_auto">자동 실행</string>
+    <string name="notif_title">세워두면 스탠바이가 켜집니다</string>
+    <string name="notif_text">잠금 화면에서 휴대폰을 반쯤 접어 세워두세요</string>
+</resources>
