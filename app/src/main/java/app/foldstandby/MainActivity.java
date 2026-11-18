@@ -101,6 +101,17 @@ public class MainActivity extends Activity
     private static final float TENT_START = 135f;
     private static final float TENT_END = 150f;
 
+    // 세워둔 휴대폰을 들거나 옮기면 스탠바이를 닫습니다.
+    static final String KEY_CLOSE_MOVE = "close_on_move";
+    private static final float STAND_MIN_ANGLE = 20f;
+    private static final float STAND_MAX_ANGLE = 150f;
+    private static final float STILL_JITTER = 0.6f;   // 이보다 덜 흔들리면 가만히 놓인 것으로 봅니다(m/s²)
+    private static final long STILL_MS = 2000L;       // 이만큼 가만히 있으면 그때의 자세를 기준으로 삼습니다
+    private static final float MOVE_COS = 0.927f;     // 기준 자세에서 약 22도 넘게 기울면 든 것으로 봅니다
+    private static final long MOVE_MS = 350L;
+    private static final float SHAKE_JITTER = 1.8f;   // 계속 이만큼 흔들리면 들고 움직이는 것으로 봅니다
+    private static final long SHAKE_MS = 700L;
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WebView web;           // 기본 시계 화면
     private WebView coverWeb;      // 듀얼 스크린일 때 바깥 화면에 띄우는 시계
@@ -141,6 +152,16 @@ public class MainActivity extends Activity
     private boolean moodOn = true;
     private int moodColor = 0xFFFF9A3C;
     private float moodLevel = 0.45f;
+
+    private Sensor accelSensor;
+    private boolean closeOnMove = true;
+    private boolean hasGravity = false;
+    private float gx, gy, gz;          // 천천히 따라가는 중력 방향
+    private float jitter = 0f;         // 흔들림 정도
+    private long accelAt = 0L;
+    private boolean hasBase = false;   // 세워둔 자세를 기준으로 잡았는지
+    private float bx, by, bz;
+    private long stillSince = 0L, tiltSince = 0L, shakeSince = 0L;
 
     private final Object imageLock = new Object();
     private final Map<String, String> imageCache = new HashMap<>(); // 웹에 넘기는 data URL. 없으면 아직 읽지 않은 것
@@ -210,6 +231,7 @@ public class MainActivity extends Activity
         prefs = getSharedPreferences(AutoLaunchService.PREFS, Context.MODE_PRIVATE);
         if (sensors != null) {
             hingeSensor = sensors.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE);
+            accelSensor = sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
             List<Sensor> found = sensors.getSensorList(Sensor.TYPE_LIGHT);
             if (found != null) {
                 lightSensors = found;
@@ -354,7 +376,13 @@ public class MainActivity extends Activity
             for (Sensor light : lightSensors) {
                 sensors.registerListener(this, light, SensorManager.SENSOR_DELAY_NORMAL);
             }
+            if (accelSensor != null) {
+                sensors.registerListener(this, accelSensor, SensorManager.SENSOR_DELAY_UI);
+            }
         }
+        closeOnMove = prefs.getBoolean(KEY_CLOSE_MOVE, true);
+        hasGravity = false;
+        resetStand();
         luxBySensor.clear();
         lastLux = -1f;
         send("{\"type\":\"resume\"}");
@@ -632,6 +660,8 @@ public class MainActivity extends Activity
             if (startedByHinge && (angle < 8f || angle > 165f)) {
                 ui.postDelayed(closeIfUnfolded, 1200L);
             }
+        } else if (type == Sensor.TYPE_ACCELEROMETER) {
+            onAccel(event.values[0], event.values[1], event.values[2]);
         } else if (type == Sensor.TYPE_LIGHT) {
             // 세워두면 안쪽 센서는 가려져 어둡게 나옵니다. 그래서 센서들 가운데 가장 밝은 값을 씁니다.
             luxBySensor.put(event.sensor, event.values[0]);
@@ -652,6 +682,76 @@ public class MainActivity extends Activity
     @Override
     public void onAccuracyChanged(Sensor sensor, int accuracy) {
         // 쓰지 않습니다.
+    }
+
+    private void resetStand() {
+        hasBase = false;
+        stillSince = 0L;
+        tiltSince = 0L;
+        shakeSince = 0L;
+    }
+
+    /**
+     * 세워둔 채 2초쯤 가만히 있으면 그 자세를 기준으로 잡고, 그 뒤 기준에서 크게 기울거나(들기)
+     * 계속 흔들리면(들고 이동) 스탠바이를 닫아 원래 화면으로 돌아갑니다.
+     */
+    private void onAccel(float x, float y, float z) {
+        long now = System.currentTimeMillis();
+        if (!hasGravity) {
+            gx = x;
+            gy = y;
+            gz = z;
+            jitter = 0f;
+            accelAt = now;
+            hasGravity = true;
+            return;
+        }
+        float dt = Math.max(1f, Math.min(500f, (float) (now - accelAt)));
+        accelAt = now;
+        float a = dt / (250f + dt);
+        float dx = x - gx;
+        float dy = y - gy;
+        float dz = z - gz;
+        gx += a * dx;
+        gy += a * dy;
+        gz += a * dz;
+        jitter += a * ((float) Math.sqrt(dx * dx + dy * dy + dz * dz) - jitter);
+
+        boolean stand = closeOnMove && hingeAngle >= STAND_MIN_ANGLE && hingeAngle <= STAND_MAX_ANGLE;
+        if (!stand) {
+            resetStand();
+            return;
+        }
+        if (!hasBase) {
+            // 힌지가 수평(가로로 세움)이거나 수직(책처럼 세움)인 채로 가만히 있을 때만 기준을 잡습니다.
+            float hinge = Math.abs(gy);
+            boolean resting = jitter < STILL_JITTER && (hinge < 4.5f || hinge > 9.0f);
+            if (!resting) {
+                stillSince = 0L;
+            } else if (stillSince == 0L) {
+                stillSince = now;
+            } else if (now - stillSince >= STILL_MS) {
+                bx = gx;
+                by = gy;
+                bz = gz;
+                hasBase = true;
+                tiltSince = 0L;
+                shakeSince = 0L;
+            }
+            return;
+        }
+        float dot = gx * bx + gy * by + gz * bz;
+        float len = (float) (Math.sqrt(gx * gx + gy * gy + gz * gz) * Math.sqrt(bx * bx + by * by + bz * bz));
+        boolean tilted = len > 0f && dot / len < MOVE_COS;
+        tiltSince = tilted ? (tiltSince == 0L ? now : tiltSince) : 0L;
+        shakeSince = jitter > SHAKE_JITTER ? (shakeSince == 0L ? now : shakeSince) : 0L;
+        if ((tiltSince != 0L && now - tiltSince >= MOVE_MS) || (shakeSince != 0L && now - shakeSince >= SHAKE_MS)) {
+            resetStand();
+            if (!isFinishing()) {
+                AutoLaunchService.rearm(); // 다시 세워두면 켜지도록
+                finish();
+            }
+        }
     }
 
     // ───────── 웹으로 보내기 ─────────
@@ -1125,7 +1225,15 @@ public class MainActivity extends Activity
                     + ",\"charge\":" + prefs.getBoolean(AutoLaunchService.KEY_CHARGE, false)
                     + ",\"unlocked\":" + prefs.getBoolean(AutoLaunchService.KEY_UNLOCKED, true)
                     + ",\"overlay\":" + Settings.canDrawOverlays(MainActivity.this)
+                    + ",\"move\":" + prefs.getBoolean(KEY_CLOSE_MOVE, true)
                     + ",\"sensor\":" + (hingeSensor != null) + "}";
+        }
+
+        /** 세워둔 휴대폰을 들거나 옮기면 스탠바이를 닫을지. */
+        @JavascriptInterface
+        public void setCloseOnMove(boolean enabled) {
+            prefs.edit().putBoolean(KEY_CLOSE_MOVE, enabled).apply();
+            closeOnMove = enabled;
         }
 
         @JavascriptInterface

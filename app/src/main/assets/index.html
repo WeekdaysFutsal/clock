@@ -697,6 +697,8 @@ html[data-night="1"] .ubg{filter:url(#redonly);opacity:calc(var(--ubgop,.14)*.7)
         <button class="switch" role="switch" data-auto="hinge" aria-label="세워두면 자동으로 켜기"></button></div>
       <div><span class="label">잠금이 풀려 있을 때도 켜기<small>살짝 벌려 가로로 세운 채 가만히 두면 켜집니다. 세워서 영상 같은 다른 앱을 볼 때는 꺼 두세요.</small></span>
         <button class="switch" role="switch" id="auto-unlocked" aria-label="잠금이 풀려 있을 때도 켜기"></button></div>
+      <div><span class="label">들거나 옮기면 닫기<small id="move-hint">세워둔 휴대폰을 들거나 들고 움직이면 스탠바이를 닫고 원래 휴대폰 화면으로 돌아갑니다. ‘세워두면 자동으로 켜기’를 켜 두었다면 다시 세워둘 때 다시 켜집니다.</small></span>
+        <button class="switch" role="switch" id="close-move" aria-label="들거나 옮기면 닫기"></button></div>
       <div><span class="label">충전기를 연결하면 켜기<small>잠금 상태에서 충전을 시작하면 스탠바이가 켜집니다.</small></span>
         <button class="switch" role="switch" data-auto="charge" aria-label="충전기를 연결하면 켜기"></button></div>
       <div id="overlay-row" hidden><span class="label">권한이 필요합니다<small>자동으로 켜려면 ‘다른 앱 위에 표시’ 권한을 허용해야 합니다.</small></span>
@@ -760,7 +762,7 @@ const preview = !window.Native;
 const N = window.Native || {
   nextAlarm() { const d = new Date(); d.setHours(7, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return String(d.getTime()); },
   setAlarm() { setTimeout(() => api.onNative({ type: 'alarmSent' }), 200); },
-  showAlarms() {}, setBrightness() {}, setAuto() {}, openOverlaySettings() {}, close() {}, setMood() {}, setDual() {},
+  showAlarms() {}, setBrightness() {}, setAuto() {}, setCloseOnMove() {}, openOverlaySettings() {}, close() {}, setMood() {}, setDual() {},
   setCoverRotation() {}, setAutoUnlocked() {}, requestCalendar() { setTimeout(() => api.onNative({ type: 'calendar', granted: true }), 200); },
   hasCalendar() { return true; },
   events() {   // 미리보기용 예시 일정
@@ -1589,6 +1591,7 @@ function syncSettings() {
   hinge.setAttribute('aria-checked', String(!!st.hinge)); charge.setAttribute('aria-checked', String(!!st.charge));
   hinge.disabled = st.sensor === false;
   unl.setAttribute('aria-checked', String(st.unlocked !== false)); unl.disabled = !st.hinge;
+  const mv = $('#close-move'); mv.setAttribute('aria-checked', String(st.move !== false)); mv.disabled = st.sensor === false;
   $('#auto-hint').textContent = st.sensor === false ? '이 기기에서는 접힘 각도 센서를 찾지 못해 쓸 수 없습니다.' : '휴대폰을 살짝 벌려 세워두면 스탠바이가 켜집니다.';
   $('#overlay-row').hidden = !((st.hinge || st.charge) && st.overlay === false);
   const ds = parse(call('dualState'));
@@ -1634,6 +1637,7 @@ $$('[data-auto]').forEach(b => b.addEventListener('click', () => {
   call('setAuto', !!st.hinge, !!st.charge); setTimeout(syncSettings, 150);
 }));
 $('#auto-unlocked').addEventListener('click', e => { call('setAutoUnlocked', e.currentTarget.getAttribute('aria-checked') !== 'true'); setTimeout(syncSettings, 150); });
+$('#close-move').addEventListener('click', e => { call('setCloseOnMove', e.currentTarget.getAttribute('aria-checked') !== 'true'); setTimeout(syncSettings, 150); });
 $('#overlay-open').addEventListener('click', () => call('openOverlaySettings'));
 $('#dual-switch').addEventListener('click', () => { cfg.dual = !cfg.dual; save(); call('setDual', !!cfg.dual); setTimeout(syncSettings, 200); });
 $('#cover-rot').addEventListener('click', e => { const b = e.target.closest('button[data-val]'); if (!b) return; call('setCoverRotation', +b.dataset.val); setTimeout(syncSettings, 150); });

@@ -47,6 +47,15 @@ public class AutoLaunchService extends Service implements SensorEventListener {
     private static final float MAX_HINGE_TILT = 4.5f;
     private static final float MAX_MOVE = 1.5f;
     private static final long SETTLE_MS = 1500L;
+    /** 들어서 닫힌 뒤 다시 켤 때는 더 엄격하게: 거의 움직이지 않은 채로 연속 두 번(약 3초) 확인합니다. */
+    private static final float STRICT_MOVE = 0.5f;
+    private static final int STRICT_COUNT = 2;
+    private static volatile boolean rearmRequested = false;
+
+    /** 스탠바이가 '들거나 옮겨서' 닫혔을 때 부릅니다. 다시 세워두면 켜지도록 준비합니다. */
+    static void rearm() {
+        rearmRequested = true;
+    }
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SensorManager sensors;
@@ -60,6 +69,8 @@ public class AutoLaunchService extends Service implements SensorEventListener {
     private boolean receiverOn = false;
     private boolean armed = true;       // 한 번 띄운 뒤에는 각도가 범위를 벗어나거나 화면이 다시 켜질 때까지 쉬기
     private boolean waiting = false;
+    private int stillNeeded = 0;        // 0보다 크면 가만히 있는지를 이만큼 연속으로 확인한 뒤에 엽니다
+    private int stillCount = 0;
     private float angle = -1f;
     private float angleAtStart = -1f;
     private boolean hasAccel = false;
@@ -228,6 +239,17 @@ public class AutoLaunchService extends Service implements SensorEventListener {
             ay = event.values[1];
             az = event.values[2];
             hasAccel = true;
+            if (rearmRequested) {
+                rearmRequested = false;
+                armed = true;
+                stillNeeded = STRICT_COUNT;
+                stillCount = 0;
+                waiting = false;
+                handler.removeCallbacks(settle);
+                if (inRange(angle)) {
+                    waitAgain();
+                }
+            }
             return;
         }
         if (type != Sensor.TYPE_HINGE_ANGLE) {
@@ -236,6 +258,8 @@ public class AutoLaunchService extends Service implements SensorEventListener {
         angle = event.values[0];
         if (!inRange(angle)) {
             armed = true;
+            stillNeeded = 0;
+            stillCount = 0;
             waiting = false;
             handler.removeCallbacks(settle);
             return;
@@ -255,8 +279,8 @@ public class AutoLaunchService extends Service implements SensorEventListener {
     }
 
     /** 잠금이 풀린 상태에서: 살짝 벌려 가로로 세운 채 가만히 있는지. */
-    private boolean standingStill() {
-        if (angle > MAX_ANGLE_UNLOCKED) {
+    private boolean standingStill(float maxMove, float maxAngle) {
+        if (angle > maxAngle) {
             return false;
         }
         if (accelSensor == null) {
@@ -268,7 +292,7 @@ public class AutoLaunchService extends Service implements SensorEventListener {
         float dx = ax - sx;
         float dy = ay - sy;
         float dz = az - sz;
-        return dx * dx + dy * dy + dz * dz < MAX_MOVE * MAX_MOVE;
+        return dx * dx + dy * dy + dz * dz < maxMove * maxMove;
     }
 
     @Override
@@ -287,21 +311,34 @@ public class AutoLaunchService extends Service implements SensorEventListener {
             return;
         }
         if (MainActivity.visible || System.currentTimeMillis() < MainActivity.pickingUntil) {
+            if (stillNeeded > 0) {
+                waitAgain(); // 방금 닫히는 중일 수 있으니 조금 뒤 다시 봅니다.
+                return;
+            }
             armed = false; // 이미 떠 있거나, 이미지 고르는 창을 띄워 둔 동안에는 끼어들지 않습니다.
             return;
         }
         if (power != null && !power.isInteractive()) {
             return; // 화면이 꺼져 있으면 열지 않습니다. 다시 켜질 때 새로 확인합니다.
         }
-        if (!isLocked()) {
-            if (!prefs.getBoolean(KEY_UNLOCKED, true)) {
-                return;
-            }
-            if (!standingStill()) {
+        boolean locked = isLocked();
+        boolean strict = stillNeeded > 0;
+        if (!locked && !prefs.getBoolean(KEY_UNLOCKED, true)) {
+            return;
+        }
+        if (!locked || strict) {
+            if (!standingStill(strict ? STRICT_MOVE : MAX_MOVE, locked ? MAX_ANGLE : MAX_ANGLE_UNLOCKED)) {
+                stillCount = 0;
                 waitAgain(); // 손에 들고 있거나 아직 내려놓는 중이면 조금 뒤 다시 봅니다.
                 return;
             }
+            if (strict && ++stillCount < stillNeeded) {
+                waitAgain();
+                return;
+            }
         }
+        stillNeeded = 0;
+        stillCount = 0;
         armed = false;
         launch(MainActivity.AUTO_HINGE);
     }
