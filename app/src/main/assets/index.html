@@ -410,6 +410,11 @@ html[data-edition="blue"]:not([data-night="1"]) .grid .d.today b{background:#FFF
 html[data-edition="blue"]:not([data-night="1"]) .grid .d.match b{background:var(--fill);color:var(--on-fill)}
 html[data-edition="blue"]:not([data-night="1"]) .grid .d.match.away b{background:none;color:var(--ink)}
 html[data-edition="blue"]:not([data-night="1"]) .cal-l header .digits{color:var(--ink)}
+/* 배경 이미지(휴대폰에서 고른 이미지를 화면 뒤에 은은하게 깝니다). 배경을 넣으면 경기장 선 무늬는 숨깁니다 */
+.ubg{display:none;position:absolute;inset:6% 4%;pointer-events:none;background:var(--ubg,none) center/contain no-repeat;opacity:var(--ubgop,.14)}
+html[data-edition="blue"][data-ubg="1"] .ubg{display:block}
+html[data-edition="blue"][data-ubg="1"] .pitch{display:none}
+html[data-night="1"] .ubg{filter:url(#redonly);opacity:calc(var(--ubgop,.14)*.7)}
 @media (orientation:portrait){
   html[data-edition="blue"][data-uimg="1"] .face[data-face="flip"]{--cardw:232}
   html[data-edition="blue"][data-uimg="1"] .face[data-face="flip"] .uimg.mid{display:none}
@@ -600,11 +605,18 @@ html[data-edition="blue"]:not([data-night="1"]) .cal-l header .digits{color:var(
     <div class="rows">
       <div><span class="label">화면 테마<small>블루 에디션은 파랑·하양·빨강 화면에 경기 일정과 매치데이 화면을 더합니다.</small></span>
         <div class="seg" data-set="edition"><button data-val="basic">기본</button><button data-val="blue">블루</button></div></div>
-      <div data-blue><span class="label">내 이미지<small id="img-hint"></small></span>
+      <div data-blue><span class="label">로고 이미지<small id="img-hint"></small></span>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn" id="img-pick" style="font-size:15px">이미지 고르기</button>
-          <button class="btn" id="img-clear" style="font-size:15px">지우기</button>
+          <button class="btn" data-pick="logo" style="font-size:15px">이미지 고르기</button>
+          <button class="btn" data-clear="logo" style="font-size:15px">지우기</button>
         </div></div>
+      <div data-blue><span class="label">배경 이미지<small id="bg-hint"></small></span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn" data-pick="bg" style="font-size:15px">이미지 고르기</button>
+          <button class="btn" data-clear="bg" style="font-size:15px">지우기</button>
+        </div></div>
+      <div data-blue id="bg-level-row"><span class="label">배경 진하기</span>
+        <div class="seg" data-set="bgLevel"><button data-val="0.08">은은하게</button><button data-val="0.14">보통</button><button data-val="0.26">진하게</button></div></div>
       <div data-blue><span class="label">경기 일정 낱말<small>캘린더 일정 제목에 이 낱말이 들어 있으면 경기로 표시합니다. 쉼표로 나눠 여러 개를 적을 수 있습니다. 제목에 ‘홈’이나 ‘원정’이 있으면 함께 표시합니다.</small></span>
         <form class="place" id="match-form">
           <input id="match-input" type="text" autocomplete="off" enterkeyhint="done" aria-label="경기 일정 낱말">
@@ -722,7 +734,7 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const DEFAULTS = { mode: 'clock', clock: 0, plan: 0, flip: 'dark', h24: true, num: 'bold', accent: 'amber', sec: true,
   night: 'auto', dim: -1, place: { name: '서울', lat: 37.5665, lon: 126.978 }, seen2: false,
   anim: true, air: true, cal: true, alert: true, autoMode: false,
-  edition: 'basic', matchKeys: '수원,경기',   // 블루 에디션과, 경기로 볼 캘린더 일정 제목의 낱말
+  edition: 'basic', matchKeys: '수원,경기', bgLevel: 0.14,   // 블루 에디션과, 경기로 볼 캘린더 일정 제목의 낱말
   dual: true, mood: { on: true, color: '#FF9A3C', level: 0.45, auto: false, wake: true } };
 let cfg = {};
 const blue = () => cfg.edition === 'blue';
@@ -765,18 +777,18 @@ const N = window.Native || {
     ]);
   },
   // 미리보기에서는 고른 이미지를 브라우저 저장소에 둡니다
-  userImage() { try { return localStorage.getItem('standby-img') || ''; } catch (e) { return ''; } },
-  pickImage() {
+  userImage(kind) { try { return localStorage.getItem(kind === 'bg' ? 'standby-bg' : 'standby-img') || ''; } catch (e) { return ''; } },
+  pickImage(kind) {
     const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
     inp.addEventListener('change', () => {
       const f = inp.files && inp.files[0]; if (!f) return;
       const r = new FileReader();
-      r.onload = () => { try { localStorage.setItem('standby-img', r.result); api.onNative({ type: 'image', ok: true }); } catch (e) { api.onNative({ type: 'error', text: '이미지가 너무 큽니다' }); } };
+      r.onload = () => { try { localStorage.setItem(kind === 'bg' ? 'standby-bg' : 'standby-img', r.result); api.onNative({ type: 'image', kind, ok: true }); } catch (e) { api.onNative({ type: 'error', text: '이미지가 너무 큽니다' }); } };
       r.readAsDataURL(f);
     });
     inp.click();
   },
-  clearImage() { try { localStorage.removeItem('standby-img'); } catch (e) {} api.onNative({ type: 'image' }); },
+  clearImage(kind) { try { localStorage.removeItem(kind === 'bg' ? 'standby-bg' : 'standby-img'); } catch (e) {} api.onNative({ type: 'image', kind }); },
   autoState() { return JSON.stringify({ hinge: false, charge: false, unlocked: true, overlay: true, sensor: true }); },
   dualState() { return JSON.stringify({ enabled: true, status: 'available', active: false, rot: 0, angle: 60 }); },
   battery() { return JSON.stringify({ level: 82, charging: false }); },
@@ -791,7 +803,7 @@ let wx = null;                // 날씨. 아래 loadWeather 참고
 let wxFailed = false;
 let air = null;               // {pm10, pm25}
 let events = [];              // 캘린더 일정 {t 제목, b 시작, e 끝, a 종일, c 색, m 경기인지, s 홈·원정}
-let userImg = '';             // 휴대폰에서 고른 이미지(data URL). 없으면 빈 글자
+let userImg = '', userBg = '';   // 휴대폰에서 고른 로고 이미지와 배경 이미지(data URL). 없으면 빈 글자
 let eventsAt = 0;
 let calGranted = false;
 let lux = null, luxNight = false;
@@ -1227,13 +1239,16 @@ function applyLook() {
   const root = document.documentElement;
   root.dataset.num = cfg.num; root.dataset.flip = cfg.flip; root.dataset.edition = cfg.edition;
   root.dataset.sec = cfg.sec ? '1' : '0'; root.dataset.anim = cfg.anim ? '1' : '0';
+  root.style.setProperty('--ubgop', String(+cfg.bgLevel || 0.14));
   root.style.setProperty('--accent', '');   // 야간과 블루 에디션은 정해진 색을 씁니다
   if (root.dataset.night !== '1' && !blue()) root.style.setProperty('--accent', ACCENTS[cfg.accent] || ACCENTS.amber);
 }
 // 휴대폰에서 고른 이미지를 각 화면의 이미지 자리에 넣습니다
 function loadUserImage() {
-  userImg = String(call('userImage') || '');
-  document.documentElement.dataset.uimg = userImg ? '1' : '0';
+  const root = document.documentElement;
+  userImg = String(call('userImage', 'logo') || ''); userBg = String(call('userImage', 'bg') || '');
+  root.dataset.uimg = userImg ? '1' : '0'; root.dataset.ubg = userBg ? '1' : '0';
+  root.style.setProperty('--ubg', userBg ? 'url("' + userBg + '")' : 'none');
   $$('.uimg').forEach(el => {
     el.textContent = '';
     if (userImg) { const im = new Image(); im.alt = ''; im.decoding = 'async'; im.src = userImg; el.appendChild(im); }
@@ -1557,9 +1572,12 @@ function syncSettings() {
   $$('[data-blue]').forEach(el => { el.hidden = !blue(); });
   $$('[data-basic]').forEach(el => { el.hidden = blue(); });
   $$('#flip-seg button').forEach(b => { b.textContent = blue() ? (b.dataset.val === 'dark' ? '홈' : '원정') : (b.dataset.val === 'dark' ? '어두운' : '밝은'); });
-  $('#img-hint').textContent = userImg ? '고른 이미지가 시계 화면에 들어가 있습니다. 이 휴대폰 안에만 저장됩니다.'
-    : '휴대폰에 저장해 둔 이미지를 골라 시계 화면에 넣습니다. 고른 이미지는 이 휴대폰 안에만 저장됩니다.';
-  $('#img-clear').hidden = !userImg;
+  $('#img-hint').textContent = userImg ? '고른 이미지가 시계 화면의 로고 자리에 들어가 있습니다.'
+    : '휴대폰에 저장해 둔 이미지를 골라 시계 화면의 로고 자리에 넣습니다. 고른 이미지는 이 휴대폰 안에만 저장됩니다.';
+  $('#bg-hint').textContent = userBg ? '고른 이미지가 모든 화면 뒤에 은은하게 깔려 있습니다.'
+    : '휴대폰에 저장해 둔 이미지를 골라 화면 뒤에 은은하게 깝니다. 흰 선으로 된 투명 배경 이미지가 잘 어울립니다.';
+  $('[data-clear="logo"]').hidden = !userImg; $('[data-clear="bg"]').hidden = !userBg;
+  $('#bg-level-row').hidden = !blue() || !userBg;
   if (document.activeElement !== $('#match-input')) $('#match-input').value = cfg.matchKeys;
   $('#place-now').textContent = '지금: ' + cfg.place.name;
   calGranted = !!call('hasCalendar');
@@ -1587,8 +1605,8 @@ function afterSetting() {
   cfg.clock = cfg.clock % clockFaces().length;
   save(); applyLook(); applyNight(); markMatches(); buildPresets(); show(); redraw(); Sky.sync(); syncSettings();
 }
-$('#img-pick').addEventListener('click', () => { call('pickImage'); if (onCover) toast('안쪽 화면에 뜨는 창에서 이미지를 골라 주세요.', 6000); });
-$('#img-clear').addEventListener('click', () => call('clearImage'));
+$$('[data-pick]').forEach(b => b.addEventListener('click', () => { call('pickImage', b.dataset.pick); if (onCover) toast('안쪽 화면에 뜨는 창에서 이미지를 골라 주세요.', 6000); }));
+$$('[data-clear]').forEach(b => b.addEventListener('click', () => call('clearImage', b.dataset.clear)));
 $('#match-form').addEventListener('submit', e => {
   e.preventDefault();
   cfg.matchKeys = $('#match-input').value.trim() || DEFAULTS.matchKeys;
@@ -1597,7 +1615,7 @@ $('#match-form').addEventListener('submit', e => {
 $$('[data-set]').forEach(g => g.addEventListener('click', e => {
   const b = e.target.closest('button[data-val]'); if (!b) return;
   const k = g.dataset.set, v = b.dataset.val;
-  cfg[k] = k === 'h24' ? v === 'true' : k === 'dim' ? +v : v;
+  cfg[k] = k === 'h24' ? v === 'true' : (k === 'dim' || k === 'bgLevel') ? +v : v;
   afterSetting();
 }));
 $$('[data-switch]').forEach(b => b.addEventListener('click', () => {
@@ -1660,7 +1678,7 @@ const api = {
     }
     else if (msg.type === 'calendar') { loadEvents(); renderInfo(); if ($('#sheet-settings.open')) syncSettings(); if (msg.granted) toast('캘린더 일정을 연결했습니다'); }
     else if (msg.type === 'alarmSent') { toast((pendingAlarmText || '알람') + ' 알람을 시계 앱에 등록했습니다'); pendingAlarmText = ''; }
-    else if (msg.type === 'image') { loadUserImage(); if ($('#sheet-settings.open')) syncSettings(); if (msg.ok) toast('고른 이미지를 시계 화면에 넣었습니다'); }
+    else if (msg.type === 'image') { loadUserImage(); if ($('#sheet-settings.open')) syncSettings(); if (msg.ok) toast(msg.kind === 'bg' ? '고른 이미지를 배경에 깔았습니다' : '고른 이미지를 로고 자리에 넣었습니다'); }
     else if (msg.type === 'error') { toast(msg.text || '요청을 처리하지 못했습니다'); }
     else if (msg.type === 'resume') { loadCfg(); readNative(); loadEvents(); applyLook(); buildPresets(); show(); applyNight.last = undefined; applyMood.last = undefined; redraw(); if ($('#sheet-settings.open')) syncSettings(); }
   }
@@ -1675,6 +1693,7 @@ addEventListener('resize', () => { Sky.sync(); if ($('#sheet-alarm.open')) { whe
   let t = '';
   for (let i = 0; i < 12; i++) t += '<line class="tk' + (i % 3 ? '' : ' q') + '" x1="200" y1="28" x2="200" y2="' + (i % 3 ? 46 : 56) + '" transform="rotate(' + i * 30 + ' 200 200)"/>';
   $('#ticks').innerHTML = t;
+  $$('.face').forEach(f => { const d = document.createElement('div'); d.className = 'ubg'; d.setAttribute('aria-hidden', 'true'); f.insertBefore(d, f.querySelector('.pad')); });
   applyLook(); loadUserImage(); buildPresets(); readNative(); loadEvents(); show(); renderTimer(); tick();
   call('setDual', !!cfg.dual);
   if (!cfg.seen2) {

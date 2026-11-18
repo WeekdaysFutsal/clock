@@ -86,13 +86,15 @@ public class MainActivity extends Activity
 
     private static final String PAGE = "file:///android_asset/index.html";
     private static final int REQUEST_CALENDAR = 41;
-    private static final int REQUEST_IMAGE = 42;
+    private static final int REQUEST_IMAGE = 42; // 로고 자리에 넣을 이미지
+    private static final int REQUEST_BG = 43;    // 배경에 깔 이미지
     /** 사용자가 고른 이미지. 앱 전용 저장 공간에만 두고, 저장소(코드)에는 넣지 않습니다. */
-    private static final String IMAGE_FILE = "user_image";
-    private static final String KEY_IMAGE_MIME = "user_image_mime";
+    private static final String KIND_LOGO = "logo";
+    private static final String KIND_BG = "bg";
     private static final int IMAGE_MAX_BYTES = 12 * 1024 * 1024; // 고를 수 있는 원본 크기
     private static final int SVG_MAX_BYTES = 1024 * 1024;
     private static final int IMAGE_MAX_SIDE = 1024;             // 긴 변이 이보다 크면 줄여서 저장
+    private static final int BG_MAX_SIDE = 1600;                // 배경은 크게 보이므로 조금 더 크게
     /** 이미지 고르는 창이 떠 있는 동안에는 자동 실행이 끼어들지 않게 합니다. */
     static volatile long pickingUntil = 0L;
     /** 이 각도보다 덜 벌어져 있으면 "세워둔 자세"로 보고 바깥 화면에 시계를 띄웁니다. */
@@ -141,7 +143,7 @@ public class MainActivity extends Activity
     private float moodLevel = 0.45f;
 
     private final Object imageLock = new Object();
-    private String imageCache; // 웹에 넘기는 data URL. null이면 아직 읽지 않은 것
+    private final Map<String, String> imageCache = new HashMap<>(); // 웹에 넘기는 data URL. 없으면 아직 읽지 않은 것
 
     /** 세워둔 휴대폰을 완전히 펴거나 접으면 스탠바이를 닫습니다(세워서 켜진 경우에만). */
     private final Runnable closeIfUnfolded = new Runnable() {
@@ -710,9 +712,10 @@ public class MainActivity extends Activity
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_IMAGE) {
+        if (requestCode != REQUEST_IMAGE && requestCode != REQUEST_BG) {
             return;
         }
+        final String kind = requestCode == REQUEST_BG ? KIND_BG : KIND_LOGO;
         pickingUntil = 0L;
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
@@ -721,8 +724,8 @@ public class MainActivity extends Activity
         new Thread(new Runnable() {
             @Override
             public void run() {
-                if (saveImage(uri)) {
-                    send("{\"type\":\"image\",\"ok\":true}");
+                if (saveImage(uri, kind)) {
+                    send("{\"type\":\"image\",\"kind\":\"" + kind + "\",\"ok\":true}");
                 } else {
                     sendError("이미지를 넣지 못했습니다. PNG, JPG, SVG 파일인지 확인해 주세요");
                 }
@@ -730,8 +733,21 @@ public class MainActivity extends Activity
         }).start();
     }
 
-    /** 고른 이미지를 앱 전용 공간에 저장합니다. 사진은 긴 변 1024px 이하 PNG로, SVG는 그대로 둡니다. */
-    private boolean saveImage(Uri uri) {
+    private static String kindOf(String kind) {
+        return KIND_BG.equals(kind) ? KIND_BG : KIND_LOGO;
+    }
+
+    private File imageFile(String kind) {
+        return new File(getFilesDir(), KIND_BG.equals(kind) ? "user_bg" : "user_image");
+    }
+
+    private static String mimeKey(String kind) {
+        return KIND_BG.equals(kind) ? "user_bg_mime" : "user_image_mime";
+    }
+
+    /** 고른 이미지를 앱 전용 공간에 저장합니다. 사진은 긴 변을 줄인 PNG로, SVG는 그대로 둡니다. */
+    private boolean saveImage(Uri uri, String kind) {
+        final int maxSide = KIND_BG.equals(kind) ? BG_MAX_SIDE : IMAGE_MAX_SIDE;
         try {
             String type = getContentResolver().getType(uri);
             byte[] raw = readAll(uri, IMAGE_MAX_BYTES);
@@ -754,7 +770,7 @@ public class MainActivity extends Activity
                     return false;
                 }
                 int sample = 1;
-                while (Math.max(bounds.outWidth, bounds.outHeight) / sample > IMAGE_MAX_SIDE * 2) {
+                while (Math.max(bounds.outWidth, bounds.outHeight) / sample > maxSide * 2) {
                     sample *= 2;
                 }
                 BitmapFactory.Options options = new BitmapFactory.Options();
@@ -766,8 +782,8 @@ public class MainActivity extends Activity
                 int w = bitmap.getWidth();
                 int h = bitmap.getHeight();
                 int side = Math.max(w, h);
-                if (side > IMAGE_MAX_SIDE) {
-                    float k = IMAGE_MAX_SIDE / (float) side;
+                if (side > maxSide) {
+                    float k = maxSide / (float) side;
                     Bitmap small = Bitmap.createScaledBitmap(bitmap,
                             Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)), true);
                     if (small != bitmap) {
@@ -782,14 +798,14 @@ public class MainActivity extends Activity
                 mime = "image/png";
             }
             synchronized (imageLock) {
-                FileOutputStream file = new FileOutputStream(new File(getFilesDir(), IMAGE_FILE));
+                FileOutputStream file = new FileOutputStream(imageFile(kind));
                 try {
                     file.write(out);
                 } finally {
                     file.close();
                 }
-                prefs.edit().putString(KEY_IMAGE_MIME, mime).apply();
-                imageCache = null;
+                prefs.edit().putString(mimeKey(kind), mime).apply();
+                imageCache.remove(kind);
             }
             return true;
         } catch (Exception e) {
@@ -826,14 +842,15 @@ public class MainActivity extends Activity
     }
 
     /** 저장해 둔 이미지를 웹 화면이 바로 쓸 수 있는 data URL로 돌려줍니다. 없으면 빈 글자. */
-    private String imageDataUrl() {
+    private String imageDataUrl(String kind) {
         synchronized (imageLock) {
-            if (imageCache != null) {
-                return imageCache;
+            String cached = imageCache.get(kind);
+            if (cached != null) {
+                return cached;
             }
             String result = "";
-            File file = new File(getFilesDir(), IMAGE_FILE);
-            String mime = prefs.getString(KEY_IMAGE_MIME, "");
+            File file = imageFile(kind);
+            String mime = prefs.getString(mimeKey(kind), "");
             if (file.exists() && mime.length() > 0) {
                 try {
                     FileInputStream in = new FileInputStream(file);
@@ -852,16 +869,16 @@ public class MainActivity extends Activity
                     result = "";
                 }
             }
-            imageCache = result;
+            imageCache.put(kind, result);
             return result;
         }
     }
 
-    private void removeImage() {
+    private void removeImage(String kind) {
         synchronized (imageLock) {
-            new File(getFilesDir(), IMAGE_FILE).delete();
-            prefs.edit().remove(KEY_IMAGE_MIME).apply();
-            imageCache = "";
+            imageFile(kind).delete();
+            prefs.edit().remove(mimeKey(kind)).apply();
+            imageCache.put(kind, "");
         }
     }
 
@@ -1059,15 +1076,16 @@ public class MainActivity extends Activity
             return readEvents((long) from, (long) to);
         }
 
-        /** 휴대폰에서 고른 이미지(data URL). 없으면 빈 글자. */
+        /** 휴대폰에서 고른 이미지(data URL). kind는 "logo"(로고 자리) 또는 "bg"(배경). 없으면 빈 글자. */
         @JavascriptInterface
-        public String userImage() {
-            return imageDataUrl();
+        public String userImage(String kind) {
+            return imageDataUrl(kindOf(kind));
         }
 
         /** 휴대폰의 파일 고르기 창을 열어 이미지를 하나 고르게 합니다. */
         @JavascriptInterface
-        public void pickImage() {
+        public void pickImage(String kind) {
+            final int request = KIND_BG.equals(kind) ? REQUEST_BG : REQUEST_IMAGE;
             whenUnlocked(new Runnable() {
                 @Override
                 public void run() {
@@ -1076,7 +1094,7 @@ public class MainActivity extends Activity
                     intent.setType("image/*");
                     try {
                         pickingUntil = System.currentTimeMillis() + 3 * 60 * 1000L;
-                        startActivityForResult(intent, REQUEST_IMAGE);
+                        startActivityForResult(intent, request);
                     } catch (RuntimeException e) {
                         pickingUntil = 0L;
                         sendError("이미지를 고르는 창을 열지 못했습니다");
@@ -1086,9 +1104,10 @@ public class MainActivity extends Activity
         }
 
         @JavascriptInterface
-        public void clearImage() {
-            removeImage();
-            send("{\"type\":\"image\"}");
+        public void clearImage(String kind) {
+            String k = kindOf(kind);
+            removeImage(k);
+            send("{\"type\":\"image\",\"kind\":\"" + k + "\"}");
         }
 
         @JavascriptInterface
