@@ -286,8 +286,8 @@ public class AutoLaunchService extends Service implements SensorEventListener {
             waitAgain(); // 아직 움직이는 중이면 한 번 더 기다립니다.
             return;
         }
-        if (MainActivity.visible) {
-            armed = false;
+        if (MainActivity.visible || System.currentTimeMillis() < MainActivity.pickingUntil) {
+            armed = false; // 이미 떠 있거나, 이미지 고르는 창을 띄워 둔 동안에는 끼어들지 않습니다.
             return;
         }
         if (power != null && !power.isInteractive()) {

@@ -12,6 +12,8 @@ import android.content.ContentUris;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -26,6 +28,7 @@ import android.os.Looper;
 import android.provider.AlarmClock;
 import android.provider.CalendarContract;
 import android.provider.Settings;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
@@ -49,6 +52,11 @@ import androidx.window.java.area.WindowAreaControllerCallbackAdapter;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -78,6 +86,15 @@ public class MainActivity extends Activity
 
     private static final String PAGE = "file:///android_asset/index.html";
     private static final int REQUEST_CALENDAR = 41;
+    private static final int REQUEST_IMAGE = 42;
+    /** 사용자가 고른 이미지. 앱 전용 저장 공간에만 두고, 저장소(코드)에는 넣지 않습니다. */
+    private static final String IMAGE_FILE = "user_image";
+    private static final String KEY_IMAGE_MIME = "user_image_mime";
+    private static final int IMAGE_MAX_BYTES = 12 * 1024 * 1024; // 고를 수 있는 원본 크기
+    private static final int SVG_MAX_BYTES = 1024 * 1024;
+    private static final int IMAGE_MAX_SIDE = 1024;             // 긴 변이 이보다 크면 줄여서 저장
+    /** 이미지 고르는 창이 떠 있는 동안에는 자동 실행이 끼어들지 않게 합니다. */
+    static volatile long pickingUntil = 0L;
     /** 이 각도보다 덜 벌어져 있으면 "세워둔 자세"로 보고 바깥 화면에 시계를 띄웁니다. */
     private static final float TENT_START = 135f;
     private static final float TENT_END = 150f;
@@ -122,6 +139,9 @@ public class MainActivity extends Activity
     private boolean moodOn = true;
     private int moodColor = 0xFFFF9A3C;
     private float moodLevel = 0.45f;
+
+    private final Object imageLock = new Object();
+    private String imageCache; // 웹에 넘기는 data URL. null이면 아직 읽지 않은 것
 
     /** 세워둔 휴대폰을 완전히 펴거나 접으면 스탠바이를 닫습니다(세워서 켜진 경우에만). */
     private final Runnable closeIfUnfolded = new Runnable() {
@@ -685,6 +705,166 @@ public class MainActivity extends Activity
         }
     }
 
+    // ───────── 내 이미지(휴대폰에서 고른 이미지) ─────────
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_IMAGE) {
+            return;
+        }
+        pickingUntil = 0L;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        final Uri uri = data.getData();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                if (saveImage(uri)) {
+                    send("{\"type\":\"image\",\"ok\":true}");
+                } else {
+                    sendError("이미지를 넣지 못했습니다. PNG, JPG, SVG 파일인지 확인해 주세요");
+                }
+            }
+        }).start();
+    }
+
+    /** 고른 이미지를 앱 전용 공간에 저장합니다. 사진은 긴 변 1024px 이하 PNG로, SVG는 그대로 둡니다. */
+    private boolean saveImage(Uri uri) {
+        try {
+            String type = getContentResolver().getType(uri);
+            byte[] raw = readAll(uri, IMAGE_MAX_BYTES);
+            if (raw == null || raw.length == 0) {
+                return false;
+            }
+            byte[] out;
+            String mime;
+            if ((type != null && type.contains("svg")) || looksLikeSvg(raw)) {
+                if (raw.length > SVG_MAX_BYTES) {
+                    return false;
+                }
+                out = raw;
+                mime = "image/svg+xml";
+            } else {
+                BitmapFactory.Options bounds = new BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(raw, 0, raw.length, bounds);
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                    return false;
+                }
+                int sample = 1;
+                while (Math.max(bounds.outWidth, bounds.outHeight) / sample > IMAGE_MAX_SIDE * 2) {
+                    sample *= 2;
+                }
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inSampleSize = sample;
+                Bitmap bitmap = BitmapFactory.decodeByteArray(raw, 0, raw.length, options);
+                if (bitmap == null) {
+                    return false;
+                }
+                int w = bitmap.getWidth();
+                int h = bitmap.getHeight();
+                int side = Math.max(w, h);
+                if (side > IMAGE_MAX_SIDE) {
+                    float k = IMAGE_MAX_SIDE / (float) side;
+                    Bitmap small = Bitmap.createScaledBitmap(bitmap,
+                            Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)), true);
+                    if (small != bitmap) {
+                        bitmap.recycle();
+                    }
+                    bitmap = small;
+                }
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, buffer);
+                bitmap.recycle();
+                out = buffer.toByteArray();
+                mime = "image/png";
+            }
+            synchronized (imageLock) {
+                FileOutputStream file = new FileOutputStream(new File(getFilesDir(), IMAGE_FILE));
+                try {
+                    file.write(out);
+                } finally {
+                    file.close();
+                }
+                prefs.edit().putString(KEY_IMAGE_MIME, mime).apply();
+                imageCache = null;
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        } catch (OutOfMemoryError e) {
+            return false;
+        }
+    }
+
+    private byte[] readAll(Uri uri, int limit) throws java.io.IOException {
+        InputStream in = getContentResolver().openInputStream(uri);
+        if (in == null) {
+            return null;
+        }
+        try {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[16 * 1024];
+            int n;
+            while ((n = in.read(chunk)) > 0) {
+                buffer.write(chunk, 0, n);
+                if (buffer.size() > limit) {
+                    return null;
+                }
+            }
+            return buffer.toByteArray();
+        } finally {
+            in.close();
+        }
+    }
+
+    private static boolean looksLikeSvg(byte[] raw) {
+        String head = new String(raw, 0, Math.min(raw.length, 1024), java.nio.charset.StandardCharsets.UTF_8);
+        return head.contains("<svg");
+    }
+
+    /** 저장해 둔 이미지를 웹 화면이 바로 쓸 수 있는 data URL로 돌려줍니다. 없으면 빈 글자. */
+    private String imageDataUrl() {
+        synchronized (imageLock) {
+            if (imageCache != null) {
+                return imageCache;
+            }
+            String result = "";
+            File file = new File(getFilesDir(), IMAGE_FILE);
+            String mime = prefs.getString(KEY_IMAGE_MIME, "");
+            if (file.exists() && mime.length() > 0) {
+                try {
+                    FileInputStream in = new FileInputStream(file);
+                    try {
+                        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                        byte[] chunk = new byte[16 * 1024];
+                        int n;
+                        while ((n = in.read(chunk)) > 0) {
+                            buffer.write(chunk, 0, n);
+                        }
+                        result = "data:" + mime + ";base64," + Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP);
+                    } finally {
+                        in.close();
+                    }
+                } catch (Exception e) {
+                    result = "";
+                }
+            }
+            imageCache = result;
+            return result;
+        }
+    }
+
+    private void removeImage() {
+        synchronized (imageLock) {
+            new File(getFilesDir(), IMAGE_FILE).delete();
+            prefs.edit().remove(KEY_IMAGE_MIME).apply();
+            imageCache = "";
+        }
+    }
+
     /** from~to(밀리초) 사이의 일정을 읽어 JSON 배열 글자로 돌려줍니다. */
     private String readEvents(long from, long to) {
         JSONArray out = new JSONArray();
@@ -877,6 +1057,38 @@ public class MainActivity extends Activity
         @JavascriptInterface
         public String events(double from, double to) {
             return readEvents((long) from, (long) to);
+        }
+
+        /** 휴대폰에서 고른 이미지(data URL). 없으면 빈 글자. */
+        @JavascriptInterface
+        public String userImage() {
+            return imageDataUrl();
+        }
+
+        /** 휴대폰의 파일 고르기 창을 열어 이미지를 하나 고르게 합니다. */
+        @JavascriptInterface
+        public void pickImage() {
+            whenUnlocked(new Runnable() {
+                @Override
+                public void run() {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("image/*");
+                    try {
+                        pickingUntil = System.currentTimeMillis() + 3 * 60 * 1000L;
+                        startActivityForResult(intent, REQUEST_IMAGE);
+                    } catch (RuntimeException e) {
+                        pickingUntil = 0L;
+                        sendError("이미지를 고르는 창을 열지 못했습니다");
+                    }
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void clearImage() {
+            removeImage();
+            send("{\"type\":\"image\"}");
         }
 
         @JavascriptInterface
