@@ -23,6 +23,8 @@
   --u:min(.25cqh,.15625cqw);
   --fill:var(--accent); --on-fill:#000; /* 색을 채운 단추·표시와 그 위 글자 */
   --cardw:232;   /* 플립 카드 너비 */
+  /* 유리 느낌 단추: 뒤 배경을 흐리게 비추는 반투명 면 */
+  --glass-a:rgba(255,255,255,.20); --glass-b:rgba(255,255,255,.08); --glass-line:rgba(255,255,255,.28); --glass-hi:rgba(255,255,255,.36);
 }
 /* 세로로 세웠을 때는 400 × 640 기준으로 맞춥니다 */
 @media (orientation:portrait){:root{--u:min(.25cqw,.15625cqh)}}
@@ -31,7 +33,8 @@ html[data-num="geo"]{--num:"Num Geo",var(--ui);--pair:1.12;--cap:.75;--shift:-.0
 html[data-num="black"]{--num:"Num Black",var(--ui);--pair:1.381;--cap:.734;--shift:-.003;--colon:.266}
 /* 야간: 어느 화면이든 내용만 붉은색으로 */
 html[data-night="1"]{--card:#120302;--card2:#1A0504;--panel:#120302;--ink:#E8402B;--soft:#E8402B;--dim:#B5301F;
-  --faint:#40100A;--line:#2A0B07;--accent:#E8402B;--nightband:#40100A}
+  --faint:#40100A;--line:#2A0B07;--accent:#E8402B;--nightband:#40100A;
+  --glass-a:rgba(232,64,43,.16);--glass-b:rgba(232,64,43,.06);--glass-line:rgba(232,64,43,.40);--glass-hi:rgba(232,64,43,.26)}
 
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#000;color:var(--ink);overflow:hidden}
@@ -424,6 +427,30 @@ html[data-night="1"] .ubg{filter:url(#redonly);opacity:calc(var(--ubgop,.14)*.7)
   .uimg.lg{width:calc(var(--u)*200);height:calc(var(--u)*200)}
   .md-r{flex:none;width:100%;margin:0}
 }
+/* ───────── 유리 느낌 단추 ─────────
+   외곽선만 있던 단추에 반투명 면을 넣고, 뒤에 깔린 배경은 흐리게 비칩니다. */
+.tbtn,.btn,.seg,.switch,.results button,#chrome{
+  background:linear-gradient(180deg,var(--glass-a),var(--glass-b));border:1px solid var(--glass-line);
+  -webkit-backdrop-filter:blur(16px) saturate(1.7);backdrop-filter:blur(16px) saturate(1.7);
+  box-shadow:inset 0 1px 0 var(--glass-hi),inset 0 -1px 1px rgba(0,0,0,.20),0 4px 14px rgba(0,0,0,.24)}
+.tbtn:active,.btn:active,.results button:active{background:linear-gradient(180deg,var(--glass-hi),var(--glass-a))}
+.tbtn[aria-pressed="true"]{border-color:var(--ink);background:linear-gradient(180deg,var(--glass-hi),var(--glass-a))}
+.tbtn.primary,.btn.primary{background:linear-gradient(180deg,rgba(255,255,255,.24),rgba(255,255,255,0) 62%),var(--fill);border-color:var(--glass-line)}
+html[data-night="1"] .tbtn.primary,html[data-night="1"] .btn.primary{background:var(--fill)}
+#chrome{background:linear-gradient(180deg,var(--glass-a),var(--glass-b)),rgba(8,10,16,.55)}
+.switch[aria-checked="true"]{border-color:var(--accent)}
+
+/* ───────── 배경 위치 직접 맞추기 ───────── */
+#adjust{position:fixed;inset:0;z-index:15;display:none;touch-action:none}
+body.adjusting #adjust{display:block}
+body.adjusting .pad{opacity:.28}
+body.adjusting .ubg{opacity:max(var(--ubgop,.14),.42)}
+#adjust p{position:absolute;left:50%;top:max(12px,env(safe-area-inset-top));transform:translateX(-50%);max-width:92%;padding:9px 18px;
+  border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:14px;font-weight:600;text-align:center}
+#adjust .bar{position:absolute;left:50%;bottom:max(12px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;gap:8px;
+  max-width:calc(100vw - 16px)}
+#adjust .btn{font-size:15px;color:#fff;background:linear-gradient(180deg,var(--glass-a),var(--glass-b)),rgba(8,10,16,.6)}
+#adjust .btn.primary{color:var(--on-fill);background:var(--fill)}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{transition-duration:.01s !important;animation-duration:.01s !important}
 }
@@ -575,6 +602,17 @@ html[data-night="1"] .ubg{filter:url(#redonly);opacity:calc(var(--ubgop,.14)*.7)
   </button>
 </nav>
 
+<!-- 배경 위치 직접 맞추기: 끌어서 옮기고, 두 손가락이나 단추로 크기를 바꿉니다 -->
+<div id="adjust">
+  <p>끌어서 옮기고, 두 손가락을 벌리거나 오므려 크기를 바꿉니다.</p>
+  <div class="bar">
+    <button class="btn" id="adj-minus">작게</button>
+    <button class="btn" id="adj-plus">크게</button>
+    <button class="btn" id="adj-reset">처음 위치로</button>
+    <button class="btn primary" id="adj-done">완료</button>
+  </div>
+</div>
+
 <div id="banner" role="status" aria-live="polite"></div>
 
 <!-- 알람 맞추기 -->
@@ -617,8 +655,11 @@ html[data-night="1"] .ubg{filter:url(#redonly);opacity:calc(var(--ubgop,.14)*.7)
           <button class="btn" data-pick="bg" style="font-size:15px">이미지 고르기</button>
           <button class="btn" data-clear="bg" style="font-size:15px">지우기</button>
         </div></div>
-      <div data-blue id="bg-pos-row"><span class="label">배경 배치<small>모서리를 고르면 이미지를 크게 키워 그쪽에 붙이고, 화면 밖으로 넘치는 부분은 잘라 일부만 보여 줍니다.</small></span>
-        <div class="seg" data-set="bgPos"><button data-val="br">오른쪽 아래</button><button data-val="bl">왼쪽 아래</button><button data-val="tr">오른쪽 위</button><button data-val="full">전체</button></div></div>
+      <div data-blue id="bg-pos-row"><span class="label">배경 배치<small id="bg-pos-hint"></small></span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <div class="seg" data-set="bgPos"><button data-val="br">오른쪽 아래</button><button data-val="bl">왼쪽 아래</button><button data-val="tr">오른쪽 위</button><button data-val="full">전체</button></div>
+          <button class="btn" id="bg-adjust" style="font-size:15px">직접 맞추기</button>
+        </div></div>
       <div data-blue id="bg-size-row"><span class="label">배경 크기</span>
         <div class="seg" data-set="bgSize"><button data-val="1.3">크게</button><button data-val="1.7">더 크게</button><button data-val="2.3">아주 크게</button></div></div>
       <div data-blue id="bg-level-row"><span class="label">배경 진하기</span>
@@ -742,7 +783,7 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const DEFAULTS = { mode: 'clock', clock: 0, plan: 0, flip: 'dark', h24: true, num: 'bold', accent: 'amber', sec: true,
   night: 'auto', dim: -1, place: { name: '서울', lat: 37.5665, lon: 126.978 }, seen2: false,
   anim: true, air: true, cal: true, alert: true, autoMode: false,
-  edition: 'basic', matchKeys: '수원,경기', bgLevel: 0.14, bgPos: 'br', bgSize: 1.7,   // 블루 에디션과, 경기로 볼 캘린더 일정 제목의 낱말
+  edition: 'basic', matchKeys: '수원,경기', bgLevel: 0.14, bgPos: 'br', bgSize: 1.7, bgX: 0, bgY: 0,   // 블루 에디션과, 경기로 볼 캘린더 일정 제목의 낱말
   dual: true, mood: { on: true, color: '#FF9A3C', level: 0.45, auto: false, wake: true } };
 let cfg = {};
 const blue = () => cfg.edition === 'blue';
@@ -1247,14 +1288,79 @@ function applyLook() {
   const root = document.documentElement;
   root.dataset.num = cfg.num; root.dataset.flip = cfg.flip; root.dataset.edition = cfg.edition;
   root.dataset.sec = cfg.sec ? '1' : '0'; root.dataset.anim = cfg.anim ? '1' : '0';
-  root.style.setProperty('--ubgop', String(+cfg.bgLevel || 0.14));
-  const pos = { br: '100% 100%', bl: '0% 100%', tr: '100% 0%' }[cfg.bgPos];   // 없으면 전체 보기
-  root.dataset.ubgfit = pos ? 'crop' : 'full';
-  root.style.setProperty('--ubgpos', pos || 'center');
-  root.style.setProperty('--ubgsize', pos ? Math.round((+cfg.bgSize || 1.7) * 100) + '% auto' : 'contain');
+  applyBg();
   root.style.setProperty('--accent', '');   // 야간과 블루 에디션은 정해진 색을 씁니다
   if (root.dataset.night !== '1' && !blue()) root.style.setProperty('--accent', ACCENTS[cfg.accent] || ACCENTS.amber);
 }
+// 배경 이미지의 진하기·위치·크기. 직접 맞춘 경우 위치는 화면 너비·높이에 대한 비율(%)로 기억합니다
+function applyBg() {
+  const root = document.documentElement, size = +cfg.bgSize || 1.7;
+  root.style.setProperty('--ubgop', String(+cfg.bgLevel || 0.14));
+  if (cfg.bgPos === 'custom') {
+    root.dataset.ubgfit = 'crop';
+    root.style.setProperty('--ubgpos', 'calc(' + (+cfg.bgX || 0).toFixed(2) + '*1cqw) calc(' + (+cfg.bgY || 0).toFixed(2) + '*1cqh)');
+    root.style.setProperty('--ubgsize', 'calc(' + size.toFixed(3) + '*100cqw) auto');
+    return;
+  }
+  const pos = { br: '100% 100%', bl: '0% 100%', tr: '100% 0%' }[cfg.bgPos];   // 없으면 전체 보기
+  root.dataset.ubgfit = pos ? 'crop' : 'full';
+  root.style.setProperty('--ubgpos', pos || 'center');
+  root.style.setProperty('--ubgsize', pos ? Math.round(size * 100) + '% auto' : 'contain');
+}
+/* 배경 위치 직접 맞추기 */
+let adjusting = false, bgRatio = 1.6;
+const faceBox = () => $('.face.on').getBoundingClientRect();
+function clampBg(W, H) {
+  const s = cfg.bgSize, hPct = s * W / bgRatio / H * 100;     // 이미지 높이(화면 높이의 %)
+  cfg.bgX = Math.min(92, Math.max(8 - s * 100, cfg.bgX));     // 적어도 조금은 화면 안에 남게
+  cfg.bgY = Math.min(92, Math.max(8 - hPct, cfg.bgY));
+}
+function zoomBg(k, mx, my, W, H) {
+  const s0 = cfg.bgSize, s1 = Math.min(6, Math.max(0.2, s0 * k)), q = s1 / s0;
+  const left = cfg.bgX / 100 * W, top = cfg.bgY / 100 * H;
+  cfg.bgX = (mx - (mx - left) * q) / W * 100; cfg.bgY = (my - (my - top) * q) / H * 100; cfg.bgSize = s1;
+  clampBg(W, H); applyBg();
+}
+function startAdjust() {
+  if (!userBg) return;
+  const im = new Image();
+  const go = () => {
+    bgRatio = im.naturalWidth && im.naturalHeight ? im.naturalWidth / im.naturalHeight : 1.6;
+    const f = faceBox(), W = f.width, H = f.height;
+    if (cfg.bgPos !== 'custom') {   // 지금 보이는 배치 그대로에서 시작합니다
+      let s, x, y;
+      if (cfg.bgPos === 'full') { const w = Math.min(W, H * bgRatio); s = w / W; x = (W - w) / 2; y = (H - w / bgRatio) / 2; }
+      else { s = +cfg.bgSize || 1.7; const w = s * W, h = w / bgRatio; x = cfg.bgPos === 'bl' ? 0 : W - w; y = cfg.bgPos === 'tr' ? 0 : H - h; }
+      cfg.bgSize = s; cfg.bgX = x / W * 100; cfg.bgY = y / H * 100; cfg.bgPos = 'custom';
+    }
+    adjusting = true; closeSheets(); hideChrome(); document.body.classList.add('adjusting'); applyBg();
+  };
+  im.onload = go; im.onerror = go; im.src = userBg;
+}
+function endAdjust() { adjusting = false; adjPts.clear(); document.body.classList.remove('adjusting'); save(); applyBg(); }
+const adjPts = new Map(), adjEl = $('#adjust');
+adjEl.addEventListener('pointerdown', e => {
+  if (e.target.closest('button')) return;
+  try { adjEl.setPointerCapture(e.pointerId); } catch (err) {}
+  adjPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+});
+adjEl.addEventListener('pointermove', e => {
+  const p = adjPts.get(e.pointerId); if (!p) return;
+  const f = faceBox(), W = f.width, H = f.height;
+  if (adjPts.size === 1) { cfg.bgX += (e.clientX - p.x) / W * 100; cfg.bgY += (e.clientY - p.y) / H * 100; clampBg(W, H); applyBg(); }
+  else if (adjPts.size === 2) {
+    let o = null; adjPts.forEach((v, id) => { if (id !== e.pointerId) o = v; });
+    const d0 = Math.hypot(p.x - o.x, p.y - o.y), d1 = Math.hypot(e.clientX - o.x, e.clientY - o.y);
+    if (d0 > 8) zoomBg(d1 / d0, (e.clientX + o.x) / 2 - f.left, (e.clientY + o.y) / 2 - f.top, W, H);
+  }
+  p.x = e.clientX; p.y = e.clientY;
+});
+['pointerup', 'pointercancel'].forEach(n => adjEl.addEventListener(n, e => { adjPts.delete(e.pointerId); if (adjusting) save(); }));
+$('#adj-minus').addEventListener('click', () => { const f = faceBox(); zoomBg(1 / 1.15, f.width / 2, f.height / 2, f.width, f.height); save(); });
+$('#adj-plus').addEventListener('click', () => { const f = faceBox(); zoomBg(1.15, f.width / 2, f.height / 2, f.width, f.height); save(); });
+$('#adj-reset').addEventListener('click', () => { cfg.bgPos = 'br'; cfg.bgSize = 1.7; endAdjust(); toast('배경을 오른쪽 아래 배치로 되돌렸습니다'); });
+$('#adj-done').addEventListener('click', () => { endAdjust(); toast('배경 위치를 저장했습니다'); });
+
 // 휴대폰에서 고른 이미지를 각 화면의 이미지 자리에 넣습니다
 function loadUserImage() {
   const root = document.documentElement;
@@ -1511,6 +1617,7 @@ stage.addEventListener('pointerup', e => {
 stage.addEventListener('pointercancel', () => { clearTimeout(holdTimer); down = null; });
 document.addEventListener('click', e => { if (Date.now() - blockClickAt < 400) { e.stopPropagation(); e.preventDefault(); } }, true);
 document.addEventListener('keydown', e => {
+  if (adjusting) { if (e.key === 'Escape' || e.key === 'Enter') endAdjust(); return; }
   if ($('.sheet.open')) { if (e.key === 'Escape') closeSheets(); return; }
   if (e.key === 'ArrowRight') stepMode(1); else if (e.key === 'ArrowLeft') stepMode(-1);
   else if (e.key === ' ' || e.key === 'Enter') { if (document.activeElement && document.activeElement.tagName === 'BUTTON') return; nextFace(); }
@@ -1590,7 +1697,9 @@ function syncSettings() {
     : '휴대폰에 저장해 둔 이미지를 골라 화면 뒤에 은은하게 깝니다. 흰 선으로 된 투명 배경 이미지가 잘 어울립니다.';
   $('[data-clear="logo"]').hidden = !userImg; $('[data-clear="bg"]').hidden = !userBg;
   $('#bg-level-row').hidden = $('#bg-pos-row').hidden = !blue() || !userBg;
-  $('#bg-size-row').hidden = !blue() || !userBg || cfg.bgPos === 'full';
+  $('#bg-size-row').hidden = !blue() || !userBg || cfg.bgPos === 'full' || cfg.bgPos === 'custom';
+  $('#bg-pos-hint').textContent = cfg.bgPos === 'custom' ? '직접 맞춘 위치와 크기를 쓰고 있습니다. ‘직접 맞추기’로 다시 고칠 수 있습니다.'
+    : '모서리를 고르면 이미지를 크게 키워 그쪽에 붙이고 넘치는 부분은 잘라 냅니다. ‘직접 맞추기’를 누르면 끌어서 원하는 위치와 크기로 맞출 수 있습니다.';
   if (document.activeElement !== $('#match-input')) $('#match-input').value = cfg.matchKeys;
   $('#place-now').textContent = '지금: ' + cfg.place.name;
   calGranted = !!call('hasCalendar');
@@ -1619,6 +1728,7 @@ function afterSetting() {
   cfg.clock = cfg.clock % clockFaces().length;
   save(); applyLook(); applyNight(); markMatches(); buildPresets(); show(); redraw(); Sky.sync(); syncSettings();
 }
+$('#bg-adjust').addEventListener('click', startAdjust);
 $$('[data-pick]').forEach(b => b.addEventListener('click', () => { call('pickImage', b.dataset.pick); if (onCover) toast('안쪽 화면에 뜨는 창에서 이미지를 골라 주세요.', 6000); }));
 $$('[data-clear]').forEach(b => b.addEventListener('click', () => call('clearImage', b.dataset.clear)));
 $('#match-form').addEventListener('submit', e => {
@@ -1629,6 +1739,7 @@ $('#match-form').addEventListener('submit', e => {
 $$('[data-set]').forEach(g => g.addEventListener('click', e => {
   const b = e.target.closest('button[data-val]'); if (!b) return;
   const k = g.dataset.set, v = b.dataset.val;
+  if (k === 'bgPos' && cfg.bgPos === 'custom') cfg.bgSize = 1.7;
   cfg[k] = k === 'h24' ? v === 'true' : (k === 'dim' || k === 'bgLevel' || k === 'bgSize') ? +v : v;
   afterSetting();
 }));
